@@ -2,14 +2,19 @@
 
 > Türkçe belge · [English documentation](README.en.md)
 
+[En son sürümü indir](https://github.com/ferhatmete/dlss-mfg-manager/releases/latest) · [Güvenli kullanım](SECURITY.md) · [Üçüncü taraf bildirimleri](THIRD_PARTY_NOTICES.md)
+
 DLSS MFG Manager, Windows 10/11 üzerinde oyun bazında `dlssg_for_sm86` kurulumu yönetmek için hazırlanmış, kaynak kodu yayımlanan bir .NET 8 WinForms aracıdır. RTX 20 (SM75) ve RTX 30 (SM86) serisi kartları hedefler.
 
 > [!CAUTION]
 > **Yalnızca çevrimdışı / tek oyunculu oyunlarda kullanın.** Anti-cheat bulunan veya çevrimiçi oyunlarda proxy DLL kullanmak hesap yaptırımı ya da kalıcı ban ile sonuçlanabilir. Oyun listesindeki bir kayıt uyumluluk garantisi değildir. Her oyunu kurulumdan önce güncel bilgilerle ayrıca kontrol edin.
 
+![DLSS MFG Manager v1.9.2 ana ekranı](docs/images/dlss-mfg-manager-v1.9.2.png)
+
 ## Bu uygulama ne yapar?
 
-- Steam ve Epic Games kütüphanelerini otomatik tarar.
+- Steam, Xbox/Microsoft Store, Epic, GOG, EA app, Ubisoft Connect, Battle.net, Rockstar, Amazon Games, Riot ve itch.io kurulumlarını otomatik tarar.
+- Launcher'a bağlı olmayan yerel/taşınabilir oyun klasörlerini kullanıcı seçimiyle tarar ve bu klasörleri sonraki taramalar için saklar.
 - Oyunun gerçek render `.exe` dosyasını elle seçmenize izin verir.
 - Seçtiğiniz `version.dll` ve `dlssg_sm86.ini` dosyalarını oyun klasörüne kurar.
 - Aynı adlı mevcut dosyaları değiştirmeden önce yedekler.
@@ -18,8 +23,9 @@ DLSS MFG Manager, Windows 10/11 üzerinde oyun bazında `dlssg_for_sm86` kurulum
 - Oyunu başlatmadan önce eksik ya da değiştirilmiş dosyaları isteğe bağlı onarır.
 - Kurduğu dosyaları kaldırır ve varsa ilk yedekteki orijinal dosyaları geri yükler.
 - Oyun listenizi ve tercihlerinizi kalıcı olarak saklar.
-- Seçili oyunun Steam kapak görselini indirip saydam bir kahraman arka planı olarak gösterebilir.
-- Türkçe ve İngilizce arayüz, modern koyu tema, desteklenen kartlar ve aranabilir oyun kataloğu sunar.
+- Seçili oyunun Steam CDN görselini geniş bir launcher arka planı olarak gösterir; kütüphanedeki eksik kart görsellerini de ikişer ikişer arka planda doldurur.
+- Modern oyun launcher’larından esinlenen açık renkli sol gezinme çubuğu, kaydırılabilir görsel oyun kartları, geniş hero alanı ve responsive işlem bölümü sunar.
+- Türkçe ve İngilizce arayüz, desteklenen kartlar ve aranabilir oyun kataloğu içerir.
 
 ## Uygulamanın yapmadıkları
 
@@ -51,10 +57,10 @@ PowerShell ile kontrol:
 Get-FileHash .\DlssMfgManager.exe -Algorithm SHA256
 ```
 
-v1.3.0 Windows x64 EXE SHA-256 değeri:
+v1.9.2 Windows x64 EXE SHA-256 değeri:
 
 ```text
-3A5992DF1E99248F0E1E1870A24F474C13FB45453EC34F44E2942617C1DE67D2
+09C25191AF2D9C6BC4BDF33AB6E59FD7F432955F5D9F7E45FBBC1BC02A2214A9
 ```
 
 Uygulama dijital olarak imzalanmamıştır. Bu nedenle Windows SmartScreen ilk çalıştırmada “Bilinmeyen yayıncı” uyarısı gösterebilir. Yalnızca bu GitHub deposunun Releases bölümünden indirin ve hash değerini kontrol edin.
@@ -100,12 +106,13 @@ Dosyaları kopyalamadan mevcut klasörlerinden kullanmak isterseniz **Klasörden
 
 ### 3. Oyun ekleyin
 
-İki yöntem vardır:
+Üç yöntem vardır:
 
-- **Oyunları Otomatik Tara:** Steam’in bütün kütüphanelerini ve Epic Games manifestlerini tarar. Bulunan adaylar önce onay penceresinde gösterilir.
+- **PC'yi Tara:** Steam manifestlerini ve manifestsiz kalmış `steamapps\common` klasörlerini; Epic manifestlerini; Xbox `MicrosoftGame.config` kayıtlarını; GOG ve Windows kurulum kayıtlarını; EA, Ubisoft, Battle.net, Rockstar, Amazon, Riot, itch.io ve yaygın yerel oyun klasörlerini tarar. Bulunan adaylar önce onay penceresinde gösterilir.
+- **Klasör Tara:** Launcher kullanmayan, taşınabilir veya özel konumdaki oyunlar için seçtiğiniz klasörü tarar. Seçilen kök sonraki **PC'yi Tara** işlemlerinde de kullanılır.
 - **Oyun Ekle:** Oyunun gerçek render `.exe` dosyasını elle seçtirir.
 
-Launcher EXE yerine genellikle `Binaries\Win64`, `bin\x64` veya oyuna özgü benzer bir klasördeki asıl oyun EXE’sini seçmeniz gerekir. Otomatik tarama sonucu yalnızca bir tahmindir; yolu kurulumdan önce kontrol edin.
+Launcher EXE yerine genellikle `Binaries\Win64`, `bin\x64` veya oyuna özgü benzer bir klasördeki asıl oyun EXE’sini seçmeniz gerekir. Tarama dosyanın edinilme kaynağını veya lisans durumunu değerlendirmez; yalnızca erişilebilir yerel 64-bit EXE adaylarını inceler. Otomatik sonuç yine de bir tahmindir ve her yolu kurulumdan önce kontrol etmelisiniz. Eski Microsoft Store `WindowsApps` paketleri şifreli/erişilemezse yönetilemez; Xbox'ın erişilebilir `XboxGames` kurulumları desteklenir.
 
 ### 4. Uyumluluğu internetten kontrol edin
 
@@ -118,9 +125,13 @@ Kurulumdan önce:
 3. Güncel `dlssg_for_sm86` sorunlarını ve oyun özelindeki kurulum notlarını araştırın.
 4. Gerekirse katalog penceresindeki **Seçili Oyunu İnternette Kontrol Et** düğmesini kullanın.
 
+Bu düğme arayüz Türkçeyken Google'ı Türkçe bölge/dil ayarlarıyla açar ve sorguya `uyumluluk`, `kurulum` ve `Türkçe` ifadelerini ekler. İngilizce arayüzde İngilizce sorgu kullanılır.
+
 ### 5. Oyun görselini kullanın (isteğe bağlı)
 
-**İnternetten oyun görseli kullan** seçiliyken uygulama Steam oyun kimliğini otomatik taramadan alır; kimlik bilinmiyorsa oyun adıyla Steam mağaza araması yapar. Bulunan kapak görseli seçili oyun alanında koyu ve saydam bir arka plan olarak gösterilir. **Görseli Yenile** ile önbelleği yenileyebilirsiniz. Bu özellik kapatıldığında uygulama yalnızca yerel renk geçişini kullanır.
+**İnternetten oyun görseli kullan** seçiliyken uygulama Steam oyun kimliğini otomatik taramadan alır; kimlik bilinmiyorsa oyun adı, EXE ürün bilgisi ve klasör adıyla Steam mağaza araması yapar. Görseller Steam'in resmi CDN adreslerinden otomatik indirilip önbelleğe alınır. Steam görseli bulunamayan yerel oyunlar için EXE ikonu ve oyun adından otomatik bir kapak üretilir; ayrıca bir yenileme düğmesine basmak gerekmez. Eksik kütüphane görselleri arayüzü kilitlemeden ve aynı anda en fazla iki istekle arka planda tamamlanır.
+
+Steam mağaza bilgisi eksik veya geçici olarak erişilemezse uygulama, SteamDB sayfasını taramak yerine SteamDB'nin de bağlandığı resmi Steam CDN yollarını yedek kaynak olarak dener. [SteamDB FAQ](https://steamdb.info/faq/) otomatik taramaya izin verilmediğini ve genel bir API sunulmadığını belirttiği için sitesinden scraping yapılmaz. Özellik kapatıldığında yalnızca yerel renk geçişi kullanılır.
 
 ### 6. MFG seviyesini seçin
 
@@ -166,6 +177,7 @@ Yedekler oyun klasöründeki şu dizinde tutulur:
 - **Kontrol edilemedi:** Oyun EXE yolu veya kaynak dosyalar erişilebilir değil.
 
 İşlem düğmeleri pencere küçültüldüğünde de tam adlarını gösterecek biçimde orantılı olarak yerleşir.
+Sol alt köşedeki **Dil Seçeneği** alanı seçili dili gösterir; sağındaki aşağı-ok simgesinden Türkçe veya İngilizce seçilebilir.
 
 ## Önemli güvenlik uyarıları
 
@@ -214,6 +226,8 @@ Oyun listesi ve tercihler:
 %LOCALAPPDATA%\DlssMfgManager\settings.json
 ```
 
+Bu dosyada kullanıcının **Klasör Tara** ile eklediği ek tarama kökleri de tutulur. Uygulama seçilmeyen klasörleri tam disk taramasıyla körlemesine dolaşmaz.
+
 İçe aktarılan kaynak paketi:
 
 ```text
@@ -226,7 +240,7 @@ Oyun listesi ve tercihler:
 %LOCALAPPDATA%\DlssMfgManager\ArtworkCache
 ```
 
-Uygulama telemetri göndermez, hesap bilgisi istemez ve otomatik olarak DLL indirmez. Oyun görseli özelliği açıksa Steam AppID bilinmeyen kayıtlar için oyun adı Steam mağaza arama hizmetine gönderilir; görsel yalnızca Steam'in HTTPS görsel alan adlarından alınır ve yerelde önbelleğe kaydedilir. Özelliği ana ekrandan kapatabilirsiniz. **İnternette kontrol et** düğmesi yalnızca varsayılan tarayıcıda hazırlanmış bir arama açar.
+Uygulama telemetri göndermez, hesap bilgisi istemez ve otomatik olarak DLL indirmez. Oyun görseli özelliği açıksa Steam AppID bilinmeyen kayıtlar için oyun adı Steam mağaza arama hizmetine gönderilir; görsel yalnızca Steam'in HTTPS görsel alan adlarından alınır ve yerelde önbelleğe kaydedilir. SteamDB sitesi otomatik olarak taranmaz. Özelliği ana ekrandan kapatabilirsiniz. **İnternette kontrol et** düğmesi yalnızca varsayılan tarayıcıda hazırlanmış bir arama açar.
 
 ## Kaynaktan derleme
 
@@ -248,7 +262,7 @@ Tek, self-contained Windows EXE oluşturmak için:
 Çıktı:
 
 ```text
-outputs\win-x64-v1.3\DlssMfgManager.exe
+outputs\win-x64-v1.9.2\DlssMfgManager.exe
 ```
 
 ## Upstream projeler ve teşekkür

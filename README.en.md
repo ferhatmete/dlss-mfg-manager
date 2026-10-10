@@ -2,14 +2,19 @@
 
 > [Türkçe belge](README.md) · English documentation
 
+[Download the latest release](https://github.com/ferhatmete/dlss-mfg-manager/releases/latest) · [Safe use](SECURITY.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
+
 DLSS MFG Manager is a source-available .NET 8 WinForms utility for managing per-game `dlssg_for_sm86` installations on Windows 10/11. It targets RTX 20-series (SM75) and RTX 30-series (SM86) GPUs.
 
 > [!CAUTION]
 > **Use only with offline / single-player games.** Loading a proxy DLL in a game with anti-cheat or online services can lead to account penalties or a permanent ban. An entry in the built-in game catalog is not a compatibility guarantee. Check current game-specific information before every installation.
 
+![DLSS MFG Manager v1.9.2 main window](docs/images/dlss-mfg-manager-v1.9.2.png)
+
 ## What does it do?
 
-- Scans all Steam libraries and Epic Games manifests.
+- Automatically scans Steam, Xbox/Microsoft Store, Epic, GOG, EA app, Ubisoft Connect, Battle.net, Rockstar, Amazon Games, Riot, and itch.io installations.
+- Scans user-selected local/portable game folders and remembers those roots for later scans.
 - Lets you manually select the game's real rendering executable.
 - Installs your selected `version.dll` and `dlssg_sm86.ini` beside the game executable.
 - Backs up files with the same names before replacing them.
@@ -18,8 +23,9 @@ DLSS MFG Manager is a source-available .NET 8 WinForms utility for managing per-
 - Optionally checks and repairs missing or modified files before launch.
 - Removes managed files and restores the first original backup when available.
 - Persists the game list and user preferences.
-- Can download the selected game's Steam artwork and display it as a dimmed hero background.
-- Includes Turkish and English UI, a modern dark theme, a supported-GPU window, and a searchable game catalog.
+- Displays the selected game's Steam CDN artwork as a wide launcher background and progressively fills missing library-card artwork in the background, two requests at a time.
+- Includes a modern light launcher-inspired sidebar, scrollable visual game cards, a wide hero area, and a responsive action surface.
+- Includes Turkish and English UI, a supported-GPU window, and a searchable game catalog.
 
 ## What it does not do
 
@@ -51,10 +57,10 @@ PowerShell verification:
 Get-FileHash .\DlssMfgManager.exe -Algorithm SHA256
 ```
 
-SHA-256 for the v1.3.0 Windows x64 EXE:
+SHA-256 for the v1.9.2 Windows x64 EXE:
 
 ```text
-3A5992DF1E99248F0E1E1870A24F474C13FB45453EC34F44E2942617C1DE67D2
+09C25191AF2D9C6BC4BDF33AB6E59FD7F432955F5D9F7E45FBBC1BC02A2214A9
 ```
 
 The application is not digitally signed. Windows SmartScreen may therefore show an “Unknown publisher” warning on first launch. Download only from this repository's Releases section and verify the hash.
@@ -100,12 +106,13 @@ Use **Use Folder** if you want to reference the files in their current directory
 
 ### 3. Add games
 
-There are two methods:
+There are three methods:
 
-- **Auto-Scan Games:** Scans every Steam library and Epic Games manifests. Candidates are shown for confirmation before anything is changed.
+- **Scan PC:** Scans Steam manifests and orphaned `steamapps\common` folders, Epic manifests, Xbox `MicrosoftGame.config` records, GOG and Windows installation records, EA, Ubisoft, Battle.net, Rockstar, Amazon, Riot, itch.io, and common local game-library folders. Candidates are shown for confirmation before anything is changed.
+- **Scan Folder:** Scans a user-selected root for launcher-free, portable, or custom-location games. The root is remembered for later **Scan PC** runs.
 - **Add Game:** Lets you manually select the game's real rendering executable.
 
-The real executable is often under a folder such as `Binaries\Win64`, `bin\x64`, or a game-specific equivalent. Do not select a launcher unless it is also the rendering process. Auto-detection is a best-effort guess; inspect the path before installation.
+The real executable is often under a folder such as `Binaries\Win64`, `bin\x64`, or a game-specific equivalent. Discovery does not evaluate where a file came from or its licence status; it only inspects accessible local 64-bit executable candidates. Auto-detection remains a best-effort guess, so inspect every path before installation. Encrypted/inaccessible legacy Microsoft Store `WindowsApps` packages cannot be managed; accessible Xbox `XboxGames` installations are supported.
 
 ### 4. Check current compatibility online
 
@@ -118,9 +125,13 @@ Before installation:
 3. Research current `dlssg_for_sm86` issues and game-specific installation notes.
 4. If helpful, use **Check Selected Game Online** in the catalog window.
 
+With the Turkish interface selected, this action opens Google with Turkish language/region parameters and adds Turkish compatibility and setup terms. The English interface continues to use an English query.
+
 ### 5. Use game artwork (optional)
 
-When **Use online game artwork** is enabled, the application uses the Steam AppID captured during automatic discovery. If no AppID is known, it searches the Steam store by game name. The result is shown as a darkened background in the selected-game area. Use **Refresh Artwork** to replace the cached copy. Disabling the option uses the local gradient background only.
+When **Use online game artwork** is enabled, the application uses the Steam AppID captured during automatic discovery. If no AppID is known, it searches the Steam store by game name, executable product metadata, and installation folder name. Artwork is downloaded and cached automatically from Steam's official CDN. If no Steam image is available for a local game, the application generates a cover from its executable icon and title; no manual refresh button is required. Missing library artwork is filled in the background without blocking the UI and with at most two simultaneous requests.
+
+If Steam store metadata is missing or temporarily unavailable, the manager probes the official Steam CDN paths that SteamDB also links to instead of crawling SteamDB itself. The [SteamDB FAQ](https://steamdb.info/faq/) says that it has no public API and disallows automated crawling. Disabling online artwork uses only the local gradient.
 
 ### 6. Select the MFG level
 
@@ -166,6 +177,7 @@ Backups are stored under the game directory:
 - **Could not verify:** The game executable or package source is inaccessible.
 
 Action buttons resize proportionally and retain their full labels when the window becomes narrow.
+The **Language** selector in the lower-left corner shows the active language and exposes Turkish/English through a visible down-arrow menu.
 
 ## Important safety notes
 
@@ -214,6 +226,8 @@ Game list and preferences:
 %LOCALAPPDATA%\DlssMfgManager\settings.json
 ```
 
+This file also stores extra scan roots added through **Scan Folder**. The application does not blindly crawl every unselected directory on every drive.
+
 Imported source package:
 
 ```text
@@ -226,7 +240,7 @@ Downloaded game artwork:
 %LOCALAPPDATA%\DlssMfgManager\ArtworkCache
 ```
 
-The application sends no telemetry, requests no account credentials, and does not automatically download DLLs. When online artwork is enabled, records without a known Steam AppID send the game name to Steam's store-search service. Artwork is accepted only from Steam HTTPS image domains and cached locally. You can disable this feature on the main screen. **Check Online** only opens a prepared search in the default browser.
+The application sends no telemetry, requests no account credentials, and does not automatically download DLLs. When online artwork is enabled, records without a known Steam AppID send the game name to Steam's store-search service. Artwork is accepted only from Steam HTTPS image domains and cached locally. SteamDB itself is not crawled. You can disable this feature on the main screen. **Check Online** only opens a prepared search in the default browser.
 
 ## Building from source
 
@@ -248,7 +262,7 @@ To publish a single self-contained Windows EXE:
 Output:
 
 ```text
-outputs\win-x64-v1.3\DlssMfgManager.exe
+outputs\win-x64-v1.9.2\DlssMfgManager.exe
 ```
 
 ## Upstream projects and acknowledgements
