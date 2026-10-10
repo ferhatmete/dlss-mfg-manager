@@ -8,7 +8,7 @@ namespace DlssMfgManager;
 public sealed class FrameGenerationGamesForm : Form
 {
     private readonly IReadOnlyList<GameEntry> _installedGames;
-    private readonly TextBox _searchText = new();
+    private readonly ModernTextBox _searchText = new();
     private readonly CheckBox _installedOnly = new();
     private readonly DataGridView _grid = new();
     private readonly Label _countLabel = new();
@@ -27,20 +27,24 @@ public sealed class FrameGenerationGamesForm : Form
         AppTheme.ApplyDarkTitleBar(this);
         ShowInTaskbar = false;
 
+        var backdrop = new LauncherBackdropPanel();
+        Controls.Add(backdrop);
+
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(18),
             RowCount = 6,
-            ColumnCount = 1
+            ColumnCount = 1,
+            BackColor = Color.Transparent
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Controls.Add(root);
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        backdrop.Controls.Add(root);
 
         root.Controls.Add(new Label
         {
@@ -70,7 +74,6 @@ public sealed class FrameGenerationGamesForm : Form
         _searchText.Dock = DockStyle.Fill;
         _searchText.PlaceholderText = L("Oyun ara...", "Search games...");
         _searchText.Margin = new Padding(0, 0, 12, 6);
-        AppTheme.StyleInput(_searchText);
         _searchText.TextChanged += (_, _) => RefreshRows();
         filter.Controls.Add(_searchText, 0, 0);
         _installedOnly.Text = L("Yalnızca listemde olanlar", "Only games in my list");
@@ -92,7 +95,7 @@ public sealed class FrameGenerationGamesForm : Form
         _grid.AllowUserToResizeRows = false;
         _grid.AutoGenerateColumns = false;
         _grid.BackgroundColor = AppTheme.Input;
-        _grid.BorderStyle = BorderStyle.FixedSingle;
+        _grid.BorderStyle = BorderStyle.None;
         _grid.RowHeadersVisible = false;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.MultiSelect = false;
@@ -105,9 +108,18 @@ public sealed class FrameGenerationGamesForm : Form
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = L("Bilgisayarınız", "Your PC"), Width = 125 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = L("Doğrulama", "Verification"), Width = 235 });
         _grid.SelectionChanged += (_, _) => _webCheckButton.Enabled = _grid.SelectedRows.Count == 1;
-        root.Controls.Add(_grid);
+        var gridCard = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = Color.FromArgb(235, AppTheme.Surface),
+            BorderColor = AppTheme.Border,
+            CornerRadius = 14,
+            Padding = new Padding(10)
+        };
+        gridCard.Controls.Add(_grid);
+        root.Controls.Add(gridCard);
 
-        var bottom = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 4 };
+        var bottom = new TableLayoutPanel { AutoSize = false, Dock = DockStyle.Fill, ColumnCount = 4 };
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -195,8 +207,19 @@ public sealed class FrameGenerationGamesForm : Form
         if (_grid.SelectedRows.Count != 1 || _grid.SelectedRows[0].Cells[0].Value is not string gameName)
             return;
 
-        var query = Uri.EscapeDataString($"{gameName} DLSS Frame Generation dlssg_for_sm86 compatibility");
-        Process.Start(new ProcessStartInfo($"https://www.google.com/search?q={query}") { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(BuildOnlineSearchUrl(gameName)) { UseShellExecute = true });
+    }
+
+    private static string BuildOnlineSearchUrl(string gameName)
+    {
+        var turkish = Localization.Current == UiLanguage.Turkish;
+        var searchText = turkish
+            ? $"{gameName} DLSS Frame Generation dlssg_for_sm86 uyumluluk kurulum Türkçe"
+            : $"{gameName} DLSS Frame Generation dlssg_for_sm86 compatibility setup";
+        var query = Uri.EscapeDataString(searchText);
+        return turkish
+            ? $"https://www.google.com/search?hl=tr&gl=tr&q={query}"
+            : $"https://www.google.com/search?hl=en&gl=us&q={query}";
     }
 
     private static string NormalizeName(string value) =>
@@ -210,15 +233,15 @@ public sealed class FrameGenerationGamesForm : Form
             AutoSize = true,
             FlatStyle = FlatStyle.Flat,
             BackColor = secondary ? AppTheme.SurfaceAlt : AppTheme.Primary,
-            ForeColor = Color.White,
+            ForeColor = secondary ? AppTheme.TextPrimary : Color.White,
             Padding = new Padding(10, 5, 10, 5),
             Margin = new Padding(8, 8, 0, 0)
         };
         button.FlatAppearance.BorderSize = secondary ? 1 : 0;
         button.FlatAppearance.BorderColor = AppTheme.Border;
         button.CornerRadius = 9;
-        button.BorderColor = secondary ? AppTheme.Border : Color.FromArgb(95, AppTheme.Accent);
-        button.HoverBackColor = secondary ? Color.FromArgb(38, 50, 74) : AppTheme.PrimaryHover;
+        button.BorderColor = secondary ? AppTheme.Border : Color.Transparent;
+        button.HoverBackColor = secondary ? AppTheme.SurfaceRaised : AppTheme.PrimaryHover;
         return button;
     }
 
@@ -227,7 +250,7 @@ public sealed class FrameGenerationGamesForm : Form
         button.AutoSize = true;
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = secondary ? AppTheme.SurfaceAlt : AppTheme.Primary;
-        button.ForeColor = Color.White;
+        button.ForeColor = secondary ? AppTheme.TextPrimary : Color.White;
         button.Padding = new Padding(10, 5, 10, 5);
         button.Margin = new Padding(8, 8, 0, 0);
         button.FlatAppearance.BorderSize = secondary ? 1 : 0;
@@ -235,8 +258,8 @@ public sealed class FrameGenerationGamesForm : Form
         if (button is ModernButton modern)
         {
             modern.CornerRadius = 9;
-            modern.BorderColor = secondary ? AppTheme.Border : Color.FromArgb(95, AppTheme.Accent);
-            modern.HoverBackColor = secondary ? Color.FromArgb(38, 50, 74) : AppTheme.PrimaryHover;
+            modern.BorderColor = secondary ? AppTheme.Border : Color.Transparent;
+            modern.HoverBackColor = secondary ? AppTheme.SurfaceRaised : AppTheme.PrimaryHover;
         }
     }
 

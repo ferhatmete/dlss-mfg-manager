@@ -18,19 +18,23 @@ public sealed class SupportedCardsForm : Form
         AppTheme.ApplyDarkTitleBar(this);
         ShowInTaskbar = false;
 
+        var backdrop = new LauncherBackdropPanel();
+        Controls.Add(backdrop);
+
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(18),
             RowCount = 5,
-            ColumnCount = 1
+            ColumnCount = 1,
+            BackColor = Color.Transparent
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Controls.Add(root);
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        backdrop.Controls.Add(root);
 
         root.Controls.Add(new Label
         {
@@ -64,7 +68,7 @@ public sealed class SupportedCardsForm : Form
             AutoGenerateColumns = false,
             AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
             BackgroundColor = AppTheme.Input,
-            BorderStyle = BorderStyle.FixedSingle,
+            BorderStyle = BorderStyle.None,
             RowHeadersVisible = false,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect
         };
@@ -74,7 +78,16 @@ public sealed class SupportedCardsForm : Form
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = L("Tür", "Type"), Width = 125 });
         foreach (var gpu in CompatibilityCatalog.SupportedGpus)
             grid.Rows.Add(gpu.Series, gpu.Model, gpu.FormFactor == "Desktop" ? L("Masaüstü", "Desktop") : gpu.FormFactor);
-        root.Controls.Add(grid);
+        var gridCard = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = Color.FromArgb(235, AppTheme.Surface),
+            BorderColor = AppTheme.Border,
+            CornerRadius = 14,
+            Padding = new Padding(10)
+        };
+        gridCard.Controls.Add(grid);
+        root.Controls.Add(gridCard);
 
         root.Controls.Add(new Label
         {
@@ -91,7 +104,7 @@ public sealed class SupportedCardsForm : Form
 
         var bottom = new FlowLayoutPanel
         {
-            AutoSize = true,
+            AutoSize = false,
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft
         };
@@ -116,15 +129,15 @@ public sealed class SupportedCardsForm : Form
             AutoSize = true,
             FlatStyle = FlatStyle.Flat,
             BackColor = secondary ? AppTheme.SurfaceAlt : AppTheme.Primary,
-            ForeColor = Color.White,
+            ForeColor = secondary ? AppTheme.TextPrimary : Color.White,
             Padding = new Padding(10, 5, 10, 5),
             Margin = new Padding(8, 0, 0, 0)
         };
         button.FlatAppearance.BorderSize = secondary ? 1 : 0;
         button.FlatAppearance.BorderColor = AppTheme.Border;
         button.CornerRadius = 9;
-        button.BorderColor = secondary ? AppTheme.Border : Color.FromArgb(95, AppTheme.Accent);
-        button.HoverBackColor = secondary ? Color.FromArgb(38, 50, 74) : AppTheme.PrimaryHover;
+        button.BorderColor = secondary ? AppTheme.Border : Color.Transparent;
+        button.HoverBackColor = secondary ? AppTheme.SurfaceRaised : AppTheme.PrimaryHover;
         return button;
     }
 

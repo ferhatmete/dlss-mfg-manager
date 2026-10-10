@@ -11,7 +11,7 @@
     <RootNamespace>DlssMfgManager</RootNamespace>
     <Product>DLSS MFG Manager</Product>
     <Description>RTX 20/30 serisi için dlssg_for_sm86 oyun kurulum yöneticisi</Description>
-    <Version>1.3.0</Version>
+    <Version>1.9.2</Version>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SelfContained>true</SelfContained>

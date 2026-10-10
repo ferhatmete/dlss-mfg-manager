@@ -6,7 +6,7 @@ namespace DlssMfgManager;
 
 public sealed class GameDiscoveryForm : Form
 {
-    private readonly CheckedListBox _gamesList = new();
+    private readonly DarkCheckedListBox _gamesList = new();
 
     public IReadOnlyList<DiscoveredGame> SelectedGames => _gamesList.CheckedItems
         .Cast<DiscoveredGame>()
@@ -24,18 +24,22 @@ public sealed class GameDiscoveryForm : Form
         AppTheme.ApplyDarkTitleBar(this);
         ShowInTaskbar = false;
 
+        var backdrop = new LauncherBackdropPanel();
+        Controls.Add(backdrop);
+
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             Padding = new Padding(18),
             RowCount = 4,
-            ColumnCount = 1
+            ColumnCount = 1,
+            BackColor = Color.Transparent
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Controls.Add(root);
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        backdrop.Controls.Add(root);
 
         root.Controls.Add(new Label
         {
@@ -64,17 +68,27 @@ public sealed class GameDiscoveryForm : Form
         _gamesList.HorizontalScrollbar = true;
         _gamesList.IntegralHeight = false;
         AppTheme.StyleInput(_gamesList);
-        _gamesList.BorderStyle = BorderStyle.FixedSingle;
+        _gamesList.BorderStyle = BorderStyle.None;
+        _gamesList.Font = new Font("Segoe UI", 9.5F);
         foreach (var game in games)
             _gamesList.Items.Add(game, true);
-        root.Controls.Add(_gamesList);
+        var listCard = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = Color.FromArgb(235, AppTheme.Surface),
+            BorderColor = AppTheme.Border,
+            CornerRadius = 14,
+            Padding = new Padding(10)
+        };
+        listCard.Controls.Add(_gamesList);
+        root.Controls.Add(listCard);
 
         var actionBar = new TableLayoutPanel
         {
-            AutoSize = true,
+            AutoSize = false,
             Dock = DockStyle.Fill,
             ColumnCount = 5,
-            Margin = new Padding(0, 12, 0, 0)
+            Margin = new Padding(0, 8, 0, 0)
         };
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionBar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -117,15 +131,15 @@ public sealed class GameDiscoveryForm : Form
             AutoSize = true,
             FlatStyle = FlatStyle.Flat,
             BackColor = secondary ? AppTheme.SurfaceAlt : AppTheme.Primary,
-            ForeColor = Color.White,
+            ForeColor = secondary ? AppTheme.TextPrimary : Color.White,
             Padding = new Padding(10, 5, 10, 5),
             Margin = new Padding(0, 0, 8, 0)
         };
         button.FlatAppearance.BorderSize = secondary ? 1 : 0;
         button.FlatAppearance.BorderColor = AppTheme.Border;
         button.CornerRadius = 9;
-        button.BorderColor = secondary ? AppTheme.Border : Color.FromArgb(95, AppTheme.Accent);
-        button.HoverBackColor = secondary ? Color.FromArgb(38, 50, 74) : AppTheme.PrimaryHover;
+        button.BorderColor = secondary ? AppTheme.Border : Color.Transparent;
+        button.HoverBackColor = secondary ? AppTheme.SurfaceRaised : AppTheme.PrimaryHover;
         return button;
     }
 

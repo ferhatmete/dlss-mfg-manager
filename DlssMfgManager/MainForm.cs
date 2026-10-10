@@ -14,7 +14,11 @@ public sealed class MainForm : Form
     private readonly AppState _state;
 
     private readonly TextBox _sourceFolderText = new();
-    private readonly ListView _gamesList = new();
+    private readonly ModernTextBox _gameSearchText = new();
+    private readonly Label _gameCountLabel = new();
+    private readonly Label _sourceStatusLabel = new();
+    private readonly DarkListView _gamesList = new();
+    private readonly GameLibraryGrid _libraryGrid = new();
     private readonly ComboBox _multiplierCombo = new();
     private readonly CheckBox _autoRepairCheck = new();
     private readonly Label _selectedGameLabel = new();
@@ -28,23 +32,27 @@ public sealed class MainForm : Form
     private readonly GameHeroPanel _heroPanel = new();
     private readonly CheckBox _onlineArtworkCheck = new();
     private readonly Label _artworkStatusLabel = new();
-    private readonly ModernButton _refreshArtworkButton = new();
-    private readonly ImageList _gameRowHeight = new() { ImageSize = new Size(1, 32), ColorDepth = ColorDepth.Depth32Bit };
+    private readonly ImageList _gameRowHeight = new() { ImageSize = new Size(1, 42), ColorDepth = ColorDepth.Depth32Bit };
     private readonly Font _narrowActionFont = new("Segoe UI Semibold", 8.25F, FontStyle.Bold);
     private readonly Font _regularActionFont = new("Segoe UI Semibold", 9F, FontStyle.Bold);
+    private readonly Font _heroTitleLargeFont = new("Segoe UI Semibold", 23F, FontStyle.Bold);
+    private readonly Font _heroTitleMediumFont = new("Segoe UI Semibold", 18F, FontStyle.Bold);
+    private readonly Font _heroTitleSmallFont = new("Segoe UI Semibold", 15F, FontStyle.Bold);
     private TableLayoutPanel? _actionButtonsLayout;
     private CancellationTokenSource? _artworkCancellation;
+    private CancellationTokenSource? _libraryArtworkCancellation;
     private bool _updatingActionLayout;
     private bool _updatingControls;
+    private Guid? _selectedGameId;
 
     public MainForm()
     {
         _artworkService = new GameArtworkService(_stateStore.DataDirectory);
         _state = _stateStore.Load();
         Localization.Use(_state.Language);
-        Text = "DLSS MFG Manager v1.3";
-        MinimumSize = new Size(940, 700);
-        Size = new Size(1040, 700);
+        Text = "DLSS MFG Manager v1.9.2";
+        MinimumSize = new Size(980, 680);
+        Size = new Size(1360, 820);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 9F);
         BackColor = AppTheme.Background;
@@ -53,111 +61,363 @@ public sealed class MainForm : Form
 
         BuildInterface();
         _sourceFolderText.Text = _state.PackageSourceFolder;
+        UpdateSourceStatus();
         RefreshGameList();
         UpdateSelectionPanel();
+        Shown += (_, _) => QueueLibraryArtworkPrefetch();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _artworkCancellation?.Cancel();
         _artworkCancellation?.Dispose();
+        _libraryArtworkCancellation?.Cancel();
+        _libraryArtworkCancellation?.Dispose();
         _artworkService.Dispose();
         _gameRowHeight.Dispose();
         _narrowActionFont.Dispose();
         _regularActionFont.Dispose();
+        _heroTitleLargeFont.Dispose();
+        _heroTitleMediumFont.Dispose();
+        _heroTitleSmallFont.Dispose();
         SaveState();
         base.OnFormClosing(e);
     }
 
     private void BuildInterface()
     {
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(18),
-            ColumnCount = 1,
-            RowCount = 5,
-            BackColor = BackColor
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        Controls.Add(root);
+        var backdrop = new LauncherBackdropPanel();
+        Controls.Add(backdrop);
 
-        var header = new TableLayoutPanel
+        var shell = new TableLayoutPanel
         {
-            AutoSize = true,
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 1,
-            Margin = new Padding(0)
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 204));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        backdrop.Controls.Add(shell);
+        shell.Controls.Add(BuildSidebarPanel(), 0, 0);
+        shell.Controls.Add(BuildWorkspacePanel(), 1, 0);
+    }
 
-        var title = new Label
-        {
-            AutoSize = true,
-            Text = "DLSS MFG Manager v1.3",
-            Font = new Font("Segoe UI Semibold", 21F, FontStyle.Bold),
-            ForeColor = AppTheme.TextPrimary,
-            Margin = new Padding(0, 0, 0, 4)
-        };
-        header.Controls.Add(title, 0, 0);
-
-        root.Controls.Add(header, 0, 0);
-
-        var subtitle = new Label
-        {
-            AutoSize = true,
-            Text = L("Desteklenen RTX 20 ve RTX 30 serisi kartlarda Frame Generation kurulumlarını oyun bazında yönetin.",
-                "Manage Frame Generation installations per game on supported RTX 20 and RTX 30 series GPUs."),
-            ForeColor = AppTheme.TextMuted,
-            Margin = new Padding(1, 0, 0, 14)
-        };
-        root.Controls.Add(subtitle, 0, 1);
-
-        root.Controls.Add(BuildNavigationPanel(), 0, 2);
-
-        var warningPanel = new Panel
-        {
-            Dock = DockStyle.Top,
-            Height = 58,
-            BackColor = AppTheme.WarningBackground,
-            Margin = new Padding(0, 0, 0, 14),
-            Padding = new Padding(14, 9, 14, 8)
-        };
-        warningPanel.Controls.Add(new Label
+    private Control BuildSidebarPanel()
+    {
+        var sidebar = new Panel
         {
             Dock = DockStyle.Fill,
-            Text = L(
-                "⚠  Yalnızca çevrimdışı / tek oyunculu oyunlarda kullanın. Anti-cheat kullanan veya çevrimiçi oyunlarda proxy DLL kullanımı ban ya da hesap yaptırımı riski oluşturabilir.",
-                "⚠  Use only in offline / single-player games. Using a proxy DLL in anti-cheat or online games may result in a ban or other account penalties."),
+            BackColor = AppTheme.Sidebar,
+            Padding = new Padding(14, 18, 14, 16),
+            Margin = Padding.Empty
+        };
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 8,
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty
+        };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        sidebar.Controls.Add(layout);
+
+        var brand = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, BackColor = Color.Transparent };
+        brand.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
+        brand.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        var logo = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "FG",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Black", 13F, FontStyle.Bold),
+            ForeColor = Color.White,
+            BackColor = AppTheme.Primary,
+            Margin = new Padding(0, 3, 8, 11)
+        };
+        brand.Controls.Add(logo, 0, 0);
+        var brandText = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = Color.Transparent };
+        brandText.Controls.Add(new Label
+        {
+            Dock = DockStyle.Bottom,
+            Text = "DLSS MFG",
+            Font = new Font("Segoe UI Semibold", 13F, FontStyle.Bold),
+            ForeColor = AppTheme.TextPrimary,
+            TextAlign = ContentAlignment.BottomLeft
+        }, 0, 0);
+        brandText.Controls.Add(new Label
+        {
+            Dock = DockStyle.Top,
+            Text = "MANAGER  •  v1.9.2",
+            Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold),
+            ForeColor = AppTheme.Accent,
+            TextAlign = ContentAlignment.TopLeft
+        }, 0, 1);
+        brand.Controls.Add(brandText, 1, 0);
+        layout.Controls.Add(brand, 0, 0);
+
+        layout.Controls.Add(NewSidebarCaption(L("KÜTÜPHANE", "LIBRARY")), 0, 1);
+        var libraryButtons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 4, 0, 0)
+        };
+        var allGamesButton = NewSidebarButton(L("▦   Oyunlarım", "▦   My Games"), active: true);
+        var supportedGamesButton = NewSidebarButton(L("◈   Frame Gen Oyunları", "◈   Frame Gen Games"));
+        supportedGamesButton.Click += (_, _) => { using var dialog = new FrameGenerationGamesForm(_state.Games); dialog.ShowDialog(this); };
+        var supportedCardsButton = NewSidebarButton(L("◆   Desteklenen Kartlar", "◆   Supported GPUs"));
+        supportedCardsButton.Click += (_, _) => { using var dialog = new SupportedCardsForm(); dialog.ShowDialog(this); };
+        libraryButtons.Controls.AddRange([allGamesButton, supportedGamesButton, supportedCardsButton]);
+        layout.Controls.Add(libraryButtons, 0, 2);
+
+        layout.Controls.Add(NewSidebarCaption(L("FRAME GEN PAKETİ", "FRAME GEN PACKAGE")), 0, 4);
+        var package = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, RowCount = 5, BackColor = Color.Transparent };
+        _sourceStatusLabel.AutoSize = false;
+        _sourceStatusLabel.Height = 48;
+        _sourceStatusLabel.Dock = DockStyle.Top;
+        _sourceStatusLabel.ForeColor = AppTheme.TextMuted;
+        _sourceStatusLabel.Font = new Font("Segoe UI", 8.25F);
+        _sourceStatusLabel.AutoEllipsis = true;
+        _sourceStatusLabel.Text = L("Dosyalar henüz seçilmedi", "Files not selected yet");
+        package.Controls.Add(_sourceStatusLabel);
+        var importButton = NewSidebarButton(L("＋  Dosyaları Seç", "＋  Select Files"));
+        importButton.Click += (_, _) => ImportPackageFiles();
+        package.Controls.Add(importButton);
+        var browseButton = NewSidebarButton(L("▣  Klasörden Kullan", "▣  Use Folder"));
+        browseButton.Click += (_, _) => SelectSourceFolder();
+        package.Controls.Add(browseButton);
+        var openButton = NewSidebarButton(L("↗  Konumu Aç", "↗  Open Location"));
+        openButton.Click += (_, _) => OpenSourceFolder();
+        package.Controls.Add(openButton);
+        layout.Controls.Add(package, 0, 5);
+
+        var safety = new GlassCardPanel
+        {
+            Height = 74,
+            Dock = DockStyle.Fill,
+            FillColor = AppTheme.WarningBackground,
+            BorderColor = Color.Transparent,
+            CornerRadius = 10,
+            Padding = new Padding(10),
+            Margin = new Padding(0, 0, 0, 0)
+        };
+        safety.Controls.Add(new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = L("⚠  Yalnızca çevrimdışı ve tek oyunculu oyunlarda kullanın.",
+                "⚠  Use only in offline and single-player games."),
             ForeColor = AppTheme.WarningText,
-            Font = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold),
+            BackColor = Color.Transparent,
+            Font = new Font("Segoe UI Semibold", 8.25F, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleLeft
         });
-        root.Controls.Add(warningPanel, 0, 3);
+        layout.Controls.Add(safety, 0, 6);
+
+        var languagePicker = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Height = 54,
+            MaximumSize = new Size(176, 54),
+            Dock = DockStyle.Top,
+            RowCount = 2,
+            ColumnCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        languagePicker.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        languagePicker.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        languagePicker.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        languagePicker.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Text = L("DİL SEÇENEĞİ", "LANGUAGE"),
+            ForeColor = AppTheme.TextMuted,
+            Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold),
+            Margin = new Padding(8, 0, 0, 4)
+        }, 0, 0);
+
+        var selector = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = AppTheme.Input,
+            BorderColor = AppTheme.Border,
+            CornerRadius = 8,
+            Padding = new Padding(1),
+            Margin = Padding.Empty
+        };
+        _languageCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _languageCombo.Items.AddRange(["Türkçe", "English"]);
+        _languageCombo.SelectedIndex = string.Equals(_state.Language, "en", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        _languageCombo.SelectedIndexChanged += LanguageChanged;
+
+        var selectedLanguage = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = _languageCombo.SelectedItem?.ToString() ?? "Türkçe",
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = AppTheme.TextPrimary,
+            BackColor = AppTheme.Input,
+            Cursor = Cursors.Hand,
+            Padding = new Padding(12, 0, 0, 0)
+        };
+        var languageArrow = new Panel
+        {
+            Name = "LanguageDropdownArrow",
+            Dock = DockStyle.Fill,
+            BackColor = AppTheme.Input,
+            Cursor = Cursors.Hand,
+            Margin = Padding.Empty
+        };
+        languageArrow.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            var centerX = languageArrow.ClientSize.Width / 2F;
+            var centerY = languageArrow.ClientSize.Height / 2F + 1F;
+            using var brush = new SolidBrush(AppTheme.TextSecondary);
+            e.Graphics.FillPolygon(brush,
+            [
+                new PointF(centerX - 4.5F, centerY - 2.5F),
+                new PointF(centerX + 4.5F, centerY - 2.5F),
+                new PointF(centerX, centerY + 3F)
+            ]);
+        };
+        var languageMenu = new ContextMenuStrip
+        {
+            Font = new Font("Segoe UI", 9F),
+            ShowImageMargin = false
+        };
+        languageMenu.Items.Add("Türkçe", null, (_, _) => _languageCombo.SelectedIndex = 0);
+        languageMenu.Items.Add("English", null, (_, _) => _languageCombo.SelectedIndex = 1);
+        void OpenLanguageMenu() => languageMenu.Show(selector, new Point(0, selector.Height));
+        selectedLanguage.Click += (_, _) => OpenLanguageMenu();
+        languageArrow.Click += (_, _) => OpenLanguageMenu();
+        selector.Disposed += (_, _) => languageMenu.Dispose();
+        var selectorLayout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = AppTheme.Input,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty
+        };
+        selectorLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        selectorLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
+        selectorLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        selectorLayout.Controls.Add(selectedLanguage, 0, 0);
+        selectorLayout.Controls.Add(languageArrow, 1, 0);
+        selector.Controls.Add(selectorLayout);
+        languagePicker.Controls.Add(selector, 0, 1);
+        layout.Controls.Add(languagePicker, 0, 7);
+        return sidebar;
+    }
+
+    private Control BuildWorkspacePanel()
+    {
+        var workspace = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 3,
+            ColumnCount = 1,
+            Padding = new Padding(20, 15, 20, 18),
+            BackColor = Color.Transparent
+        };
+        workspace.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        workspace.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        workspace.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        workspace.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, BackColor = Color.Transparent };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var heading = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, BackColor = Color.Transparent };
+        heading.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
+        heading.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
+        heading.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left | AnchorStyles.Bottom,
+            Text = L("OYUN KÜTÜPHANEM", "MY GAME LIBRARY"),
+            Font = new Font("Segoe UI Semibold", 20F, FontStyle.Bold),
+            ForeColor = AppTheme.TextPrimary
+        });
+        heading.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Anchor = AnchorStyles.Left | AnchorStyles.Top,
+            Text = L("Frame Generation kurulumlarını tek merkezden yönet", "Manage Frame Generation installs from one place"),
+            ForeColor = AppTheme.TextMuted
+        });
+        header.Controls.Add(heading, 0, 0);
+        var headerActions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, BackColor = Color.Transparent };
+        var scanButton = NewButton(L("⟳  PC'yi Tara", "⟳  Scan PC"));
+        scanButton.AutoSize = false;
+        scanButton.Width = 122;
+        scanButton.Height = 40;
+        scanButton.Click += async (_, _) => await ScanForGamesAsync();
+        var scanFolderButton = NewButton(L("⌕  Klasör Tara", "⌕  Scan Folder"), secondary: true);
+        scanFolderButton.AutoSize = false;
+        scanFolderButton.Width = 122;
+        scanFolderButton.Height = 40;
+        scanFolderButton.Click += async (_, _) => await ScanFolderForGamesAsync();
+        var addButton = NewButton(L("＋  Oyun Ekle", "＋  Add Game"), secondary: true);
+        addButton.AutoSize = false;
+        addButton.Width = 108;
+        addButton.Height = 40;
+        addButton.Click += (_, _) => AddGame();
+        headerActions.Controls.AddRange([scanButton, scanFolderButton, addButton]);
+        header.Controls.Add(headerActions, 1, 0);
+        workspace.Controls.Add(header, 0, 0);
+
+        var warning = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = AppTheme.WarningBackground,
+            BorderColor = Color.Transparent,
+            Margin = new Padding(0, 2, 0, 10),
+            Padding = new Padding(14, 4, 14, 4)
+        };
+        warning.Controls.Add(new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = L("⚠  Anti-cheat veya çevrimiçi oyunlarda kullanmayın. Her oyunun güncel uyumluluğunu internetten kontrol edin.",
+                "⚠  Do not use in anti-cheat or online games. Verify current compatibility for every game online."),
+            ForeColor = AppTheme.WarningText,
+            BackColor = Color.Transparent,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold)
+        });
+        workspace.Controls.Add(warning, 0, 1);
 
         var content = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
+            ColumnCount = 1,
             RowCount = 2,
-            Margin = new Padding(0)
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty
         };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.Controls.Add(content, 0, 4);
-
-        content.Controls.Add(BuildPackagePanel(), 0, 0);
-        content.SetColumnSpan(content.GetControlFromPosition(0, 0)!, 2);
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+        content.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
+        content.Controls.Add(BuildDetailsPanel(), 0, 0);
         content.Controls.Add(BuildGamesPanel(), 0, 1);
-        content.Controls.Add(BuildDetailsPanel(), 1, 1);
+        workspace.Controls.Add(content, 0, 2);
+        return workspace;
     }
 
     private Control BuildNavigationPanel()
@@ -247,208 +507,298 @@ public sealed class MainForm : Form
 
     private Control BuildGamesPanel()
     {
-        var group = NewGroupBox(L("Oyunlar", "Games"), new Padding(10));
-        group.Dock = DockStyle.Fill;
-        group.Margin = new Padding(0, 0, 10, 0);
+        var card = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = AppTheme.Surface,
+            BorderColor = Color.Transparent,
+            CornerRadius = 16,
+            Margin = new Padding(0, 10, 0, 0),
+            Padding = new Padding(14)
+        };
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, ColumnCount = 1, BackColor = Color.Transparent };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        group.Controls.Add(layout);
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        card.Controls.Add(layout);
 
-        _gamesList.Dock = DockStyle.Fill;
-        _gamesList.View = View.Details;
-        _gamesList.FullRowSelect = true;
-        _gamesList.HideSelection = false;
-        _gamesList.MultiSelect = false;
-        _gamesList.BorderStyle = BorderStyle.FixedSingle;
-        AppTheme.StyleListView(_gamesList);
-        _gamesList.SmallImageList = _gameRowHeight;
-        _gamesList.Columns.Add(L("Oyun", "Game"), 210);
-        _gamesList.Columns.Add("MFG", 65);
-        _gamesList.Columns.Add(L("Durum", "Status"), 200);
-        _gamesList.SelectedIndexChanged += (_, _) => UpdateSelectionPanel();
-        _gamesList.DoubleClick += (_, _) => LaunchSelectedGame();
-        layout.Controls.Add(_gamesList, 0, 0);
-
-        var buttons = new FlowLayoutPanel
+        var libraryHeader = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 3,
+            RowCount = 1,
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty
+        };
+        libraryHeader.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        libraryHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        libraryHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 320));
+        libraryHeader.Controls.Add(new Label
         {
             AutoSize = true,
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            Padding = new Padding(0, 8, 0, 0)
+            Anchor = AnchorStyles.Left,
+            Text = L("OYUNLARIN", "YOUR GAMES"),
+            ForeColor = AppTheme.TextPrimary,
+            Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold),
+            Margin = new Padding(0, 0, 14, 0)
+        }, 0, 0);
+        _gameCountLabel.AutoSize = false;
+        _gameCountLabel.Dock = DockStyle.Fill;
+        _gameCountLabel.TextAlign = ContentAlignment.MiddleLeft;
+        _gameCountLabel.ForeColor = AppTheme.TextMuted;
+        _gameCountLabel.Margin = Padding.Empty;
+        libraryHeader.Controls.Add(_gameCountLabel, 1, 0);
+
+        _gameSearchText.Dock = DockStyle.None;
+        _gameSearchText.Anchor = AnchorStyles.Right;
+        _gameSearchText.Size = new Size(320, 38);
+        _gameSearchText.PlaceholderText = L("Oyun ara...", "Search games...");
+        _gameSearchText.Margin = Padding.Empty;
+        _gameSearchText.TextChanged += (_, _) => RefreshGameList(SelectedGame?.Id);
+        libraryHeader.Controls.Add(_gameSearchText, 2, 0);
+        layout.Controls.Add(libraryHeader, 0, 0);
+
+        _libraryGrid.Dock = DockStyle.Fill;
+        _libraryGrid.Margin = Padding.Empty;
+        _libraryGrid.GameSelected += (_, game) =>
+        {
+            _selectedGameId = game.Id;
+            UpdateSelectionPanel();
         };
-        var addButton = NewButton(L("+ Oyun Ekle", "+ Add Game"), secondary: true);
-        addButton.Click += (_, _) => AddGame();
-        var scanButton = NewButton(L("Oyunları Otomatik Tara", "Auto-Scan Games"));
-        scanButton.Click += async (_, _) => await ScanForGamesAsync();
-        var removeButton = NewButton(L("Listeden Kaldır", "Remove from List"), secondary: true);
+        layout.Controls.Add(_libraryGrid, 0, 1);
+
+        var buttons = new TableLayoutPanel
+        {
+            AutoSize = false,
+            Height = 48,
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            Padding = new Padding(0, 6, 0, 0)
+        };
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var removeButton = NewButton(L("−  Listeden Kaldır", "−  Remove"), secondary: true);
         removeButton.Click += (_, _) => RemoveSelectedGame();
-        var refreshButton = NewButton(L("Yenile", "Refresh"), secondary: true);
+        removeButton.AutoSize = false;
+        removeButton.Width = 145;
+        removeButton.Height = 38;
+        var refreshButton = NewButton(L("⟳  Durumu Yenile", "⟳  Refresh Status"), secondary: true);
         refreshButton.Click += (_, _) => RefreshGameList(SelectedGame?.Id);
-        buttons.Controls.AddRange([addButton, scanButton, removeButton, refreshButton]);
-        layout.Controls.Add(buttons, 0, 1);
-        return group;
+        refreshButton.AutoSize = false;
+        refreshButton.Width = 118;
+        refreshButton.Height = 38;
+        buttons.Controls.Add(removeButton, 0, 0);
+        buttons.Controls.Add(refreshButton, 1, 0);
+        layout.Controls.Add(buttons, 0, 2);
+        return card;
+    }
+
+    private void ResizeGameColumns()
+    {
+        if (_gamesList.Columns.Count != 3 || _gamesList.ClientSize.Width < 120)
+            return;
+
+        var usable = Math.Max(120, _gamesList.ClientSize.Width - 18);
+        _gamesList.Columns[0].Width = (int)(usable * 0.58);
+        _gamesList.Columns[1].Width = (int)(usable * 0.15);
+        _gamesList.Columns[2].Width = usable - _gamesList.Columns[0].Width - _gamesList.Columns[1].Width;
+        _gamesList.ScheduleHideNativeScrollbars();
     }
 
     private Control BuildDetailsPanel()
     {
-        var group = NewGroupBox(L("Seçili oyun", "Selected game"), new Padding(7, 8, 7, 7));
-        group.Dock = DockStyle.Fill;
-        group.Margin = new Padding(10, 0, 0, 0);
+        var card = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = AppTheme.Surface,
+            BorderColor = Color.Transparent,
+            CornerRadius = 16,
+            Margin = Padding.Empty,
+            Padding = new Padding(1)
+        };
 
         _heroPanel.Dock = DockStyle.Fill;
         _heroPanel.Margin = Padding.Empty;
-        group.Controls.Add(_heroPanel);
+        card.Controls.Add(_heroPanel);
 
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            RowCount = 11,
-            ColumnCount = 1,
-            Padding = new Padding(14, 10, 14, 10),
+            RowCount = 1,
+            ColumnCount = 3,
+            Padding = new Padding(24, 14, 24, 12),
             BackColor = Color.Transparent
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 27));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         _heroPanel.Controls.Add(layout);
 
-        _selectedGameLabel.AutoSize = true;
-        _selectedGameLabel.Font = new Font("Segoe UI Semibold", 14F, FontStyle.Bold);
+        var identity = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 7,
+            ColumnCount = 1,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 0, 18, 0)
+        };
+        identity.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        identity.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        identity.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        identity.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        identity.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        identity.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+
+        _selectedGameLabel.AutoSize = false;
+        _selectedGameLabel.Dock = DockStyle.Fill;
+        _selectedGameLabel.AutoEllipsis = true;
+        _selectedGameLabel.TextAlign = ContentAlignment.BottomLeft;
+        _selectedGameLabel.Font = _heroTitleLargeFont;
         _selectedGameLabel.ForeColor = AppTheme.TextPrimary;
         _selectedGameLabel.BackColor = Color.Transparent;
-        _selectedGameLabel.Margin = new Padding(0, 0, 0, 2);
-        layout.Controls.Add(_selectedGameLabel, 0, 0);
+        _selectedGameLabel.Margin = Padding.Empty;
+        identity.Controls.Add(_selectedGameLabel, 0, 0);
 
-        _artworkStatusLabel.AutoSize = true;
-        _artworkStatusLabel.Font = new Font("Segoe UI Semibold", 8F, FontStyle.Bold);
-        _artworkStatusLabel.ForeColor = AppTheme.Accent;
+        _artworkStatusLabel.AutoSize = false;
+        _artworkStatusLabel.Dock = DockStyle.Fill;
+        _artworkStatusLabel.AutoEllipsis = true;
+        _artworkStatusLabel.Font = new Font("Segoe UI Semibold", 8.5F, FontStyle.Bold);
+        _artworkStatusLabel.ForeColor = AppTheme.AccentBlue;
         _artworkStatusLabel.BackColor = Color.Transparent;
-        _artworkStatusLabel.Margin = new Padding(0, 0, 0, 10);
-        layout.Controls.Add(_artworkStatusLabel, 0, 1);
+        _artworkStatusLabel.Margin = new Padding(1, 0, 0, 0);
+        identity.Controls.Add(_artworkStatusLabel, 0, 1);
 
-        layout.Controls.Add(NewFieldLabel(L("MFG üst sınırı", "MFG maximum")), 0, 2);
-        _multiplierCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _multiplierCombo.Items.AddRange(["2X", "3X", "4X"]);
-        _multiplierCombo.Width = 120;
-        _multiplierCombo.Margin = new Padding(0, 2, 0, 6);
-        AppTheme.StyleInput(_multiplierCombo);
-        _multiplierCombo.SelectedIndexChanged += (_, _) => MultiplierChanged();
-        layout.Controls.Add(_multiplierCombo, 0, 3);
-
-        _autoRepairCheck.Text = L("Başlatmadan önce otomatik kontrol et ve onar",
-            "Automatically check and repair before launch");
-        _autoRepairCheck.AutoSize = true;
-        _autoRepairCheck.Margin = new Padding(0, 0, 0, 8);
-        _autoRepairCheck.CheckedChanged += (_, _) => AutoRepairChanged();
-        _autoRepairCheck.BackColor = Color.Transparent;
-        layout.Controls.Add(_autoRepairCheck, 0, 4);
-
-        _onlineArtworkCheck.Text = L("İnternetten oyun görseli kullan", "Use online game artwork");
-        _onlineArtworkCheck.AutoSize = true;
-        _onlineArtworkCheck.ForeColor = AppTheme.TextSecondary;
-        _onlineArtworkCheck.BackColor = Color.Transparent;
-        _onlineArtworkCheck.Margin = new Padding(0, 0, 0, 8);
-        _onlineArtworkCheck.CheckedChanged += (_, _) => OnlineArtworkChanged();
-        layout.Controls.Add(_onlineArtworkCheck, 0, 5);
-
-        layout.Controls.Add(NewFieldLabel(L("Kurulum durumu", "Installation status")), 0, 6);
+        identity.Controls.Add(NewFieldLabel(L("KURULUM DURUMU", "INSTALLATION STATUS")), 0, 3);
         _statusLabel.AutoSize = true;
-        _statusLabel.Font = new Font("Segoe UI Semibold", 11F, FontStyle.Bold);
-        _statusLabel.Margin = new Padding(0, 2, 0, 2);
+        _statusLabel.Font = new Font("Segoe UI Semibold", 12F, FontStyle.Bold);
+        _statusLabel.Margin = new Padding(0, 4, 0, 2);
         _statusLabel.BackColor = Color.Transparent;
-        layout.Controls.Add(_statusLabel, 0, 7);
+        identity.Controls.Add(_statusLabel, 0, 4);
 
         _detailsLabel.AutoSize = false;
         _detailsLabel.Dock = DockStyle.Fill;
         _detailsLabel.AutoEllipsis = true;
-        _detailsLabel.ForeColor = AppTheme.TextMuted;
-        _detailsLabel.Margin = new Padding(0, 0, 0, 6);
+        _detailsLabel.ForeColor = AppTheme.TextSecondary;
+        _detailsLabel.Margin = Padding.Empty;
         _detailsLabel.BackColor = Color.Transparent;
-        layout.Controls.Add(_detailsLabel, 0, 8);
+        identity.Controls.Add(_detailsLabel, 0, 5);
+        layout.Controls.Add(identity, 0, 0);
 
-        var artworkBar = new FlowLayoutPanel
+        var settingsCard = new GlassCardPanel
+        {
+            Dock = DockStyle.Fill,
+            FillColor = Color.FromArgb(250, 251, 254),
+            BorderColor = Color.Transparent,
+            CornerRadius = 13,
+            Padding = new Padding(12, 6, 12, 6),
+            Margin = new Padding(0, 7, 14, 7)
+        };
+        var settings = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            RowCount = 6,
+            ColumnCount = 1,
+            BackColor = Color.Transparent,
+            Margin = Padding.Empty
+        };
+        settings.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settings.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settings.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        settings.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
+        settings.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        settings.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        settings.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        settings.Controls.Add(new Label
         {
             AutoSize = true,
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
+            Text = "FRAME GEN",
+            Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold),
+            ForeColor = AppTheme.TextPrimary,
             BackColor = Color.Transparent,
-            Margin = new Padding(0, 0, 0, 5)
-        };
-        _refreshArtworkButton.Text = L("Görseli Yenile", "Refresh Artwork");
-        StyleButton(_refreshArtworkButton, secondary: true);
-        _refreshArtworkButton.AutoSize = true;
-        _refreshArtworkButton.Height = 32;
-        _refreshArtworkButton.Padding = new Padding(10, 3, 10, 3);
-        _refreshArtworkButton.Margin = Padding.Empty;
-        _refreshArtworkButton.Click += async (_, _) => await UpdateArtworkAsync(SelectedGame, forceRefresh: true);
-        artworkBar.Controls.Add(_refreshArtworkButton);
-        layout.Controls.Add(artworkBar, 0, 9);
+            Margin = new Padding(0, 0, 0, 4)
+        }, 0, 0);
+        settings.Controls.Add(NewFieldLabel(L("MFG üst sınırı", "MFG maximum")), 0, 1);
+        _multiplierCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _multiplierCombo.Items.AddRange(["2X", "3X", "4X"]);
+        _multiplierCombo.Dock = DockStyle.Top;
+        _multiplierCombo.Margin = new Padding(0, 2, 0, 0);
+        AppTheme.StyleInput(_multiplierCombo);
+        _multiplierCombo.SelectedIndexChanged += (_, _) => MultiplierChanged();
+        settings.Controls.Add(_multiplierCombo, 0, 2);
+
+        _autoRepairCheck.Text = L("Başlatmadan önce onar", "Repair before launch");
+        _autoRepairCheck.AutoSize = false;
+        _autoRepairCheck.Dock = DockStyle.Fill;
+        _autoRepairCheck.Margin = Padding.Empty;
+        _autoRepairCheck.CheckedChanged += (_, _) => AutoRepairChanged();
+        _autoRepairCheck.BackColor = Color.Transparent;
+        settings.Controls.Add(_autoRepairCheck, 0, 4);
+
+        _onlineArtworkCheck.Text = L("Çevrimiçi görseller", "Online artwork");
+        _onlineArtworkCheck.AutoSize = false;
+        _onlineArtworkCheck.Dock = DockStyle.Fill;
+        _onlineArtworkCheck.ForeColor = AppTheme.TextSecondary;
+        _onlineArtworkCheck.BackColor = Color.Transparent;
+        _onlineArtworkCheck.Margin = Padding.Empty;
+        _onlineArtworkCheck.CheckedChanged += (_, _) => OnlineArtworkChanged();
+        settings.Controls.Add(_onlineArtworkCheck, 0, 5);
+        settingsCard.Controls.Add(settings);
+        layout.Controls.Add(settingsCard, 1, 0);
 
         var actions = new TableLayoutPanel
         {
-            AutoSize = true,
             Dock = DockStyle.Fill,
-            ColumnCount = 3,
-            RowCount = 1,
-            Margin = new Padding(0)
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = Color.Transparent,
+            Margin = new Padding(0, 7, 0, 7)
         };
-        actions.MinimumSize = new Size(300, 32);
         _actionButtonsLayout = actions;
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 29));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46));
-        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-        actions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        actions.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+
+        _launchButton.Text = L("▶  Oyunu Başlat", "▶  Launch Game");
+        StyleButton(_launchButton, false);
+        _launchButton.Dock = DockStyle.Fill;
+        _launchButton.AutoSize = false;
+        _launchButton.Padding = Padding.Empty;
+        _launchButton.Margin = new Padding(0, 0, 0, 4);
+        _launchButton.BackColor = AppTheme.Primary;
+        _launchButton.HoverBackColor = AppTheme.PrimaryHover;
+        _launchButton.PressedBackColor = Color.FromArgb(73, 77, 190);
+        _launchButton.Click += (_, _) => LaunchSelectedGame();
+        actions.Controls.Add(_launchButton, 0, 1);
 
         _installButton.Text = L("Kur / Güncelle", "Install / Update");
-        StyleButton(_installButton, false);
-        _installButton.Dock = DockStyle.Top;
+        StyleButton(_installButton, true);
+        _installButton.Dock = DockStyle.Fill;
         _installButton.AutoSize = false;
-        _installButton.Height = 40;
         _installButton.Padding = Padding.Empty;
-        _installButton.Margin = new Padding(0, 1, 4, 1);
+        _installButton.Margin = new Padding(0, 0, 0, 4);
         _installButton.Click += (_, _) => InstallSelectedGame();
-        actions.Controls.Add(_installButton, 0, 0);
+        actions.Controls.Add(_installButton, 0, 2);
 
         _uninstallButton.Text = L("Frame Gen Dosyalarını Sil", "Remove Frame Gen Files");
-        StyleButton(_uninstallButton, false);
-        _uninstallButton.Dock = DockStyle.Top;
+        StyleButton(_uninstallButton, true);
+        _uninstallButton.Dock = DockStyle.Fill;
         _uninstallButton.AutoSize = false;
-        _uninstallButton.Height = 40;
         _uninstallButton.Padding = Padding.Empty;
-        _uninstallButton.Margin = new Padding(2, 1, 2, 1);
-        _uninstallButton.BackColor = AppTheme.Danger;
-        _uninstallButton.HoverBackColor = Color.FromArgb(248, 78, 78);
-        _uninstallButton.PressedBackColor = Color.FromArgb(190, 35, 35);
+        _uninstallButton.Margin = Padding.Empty;
+        _uninstallButton.BackColor = AppTheme.SurfaceAlt;
+        _uninstallButton.ForeColor = AppTheme.StatusError;
+        _uninstallButton.HoverBackColor = Color.FromArgb(253, 232, 232);
+        _uninstallButton.PressedBackColor = Color.FromArgb(248, 218, 218);
+        _uninstallButton.BorderColor = Color.Transparent;
         _uninstallButton.Click += (_, _) => UninstallSelectedGame();
-        actions.Controls.Add(_uninstallButton, 1, 0);
+        actions.Controls.Add(_uninstallButton, 0, 3);
+        layout.Controls.Add(actions, 2, 0);
 
-        _launchButton.Text = L("Oyunu Başlat", "Launch Game");
-        StyleButton(_launchButton, false);
-        _launchButton.Dock = DockStyle.Top;
-        _launchButton.AutoSize = false;
-        _launchButton.Height = 40;
-        _launchButton.Padding = Padding.Empty;
-        _launchButton.Margin = new Padding(4, 1, 0, 1);
-        _launchButton.BackColor = AppTheme.Success;
-        _launchButton.HoverBackColor = Color.FromArgb(31, 204, 148);
-        _launchButton.PressedBackColor = Color.FromArgb(5, 135, 95);
-        _launchButton.Click += (_, _) => LaunchSelectedGame();
-        actions.Controls.Add(_launchButton, 2, 0);
-        layout.Controls.Add(actions, 0, 10);
-        actions.SizeChanged += (_, _) => UpdateActionButtonLayout();
-        UpdateActionButtonLayout();
-
-        return group;
+        return card;
     }
 
     private void UpdateActionButtonLayout()
@@ -523,8 +873,8 @@ public sealed class MainForm : Form
         button.Margin = margin;
     }
 
-    private GameEntry? SelectedGame => _gamesList.SelectedItems.Count == 1
-        ? _gamesList.SelectedItems[0].Tag as GameEntry
+    private GameEntry? SelectedGame => _selectedGameId is { } selectedId
+        ? _state.Games.FirstOrDefault(game => game.Id == selectedId)
         : null;
 
     private void LanguageChanged(object? sender, EventArgs e)
@@ -565,6 +915,7 @@ public sealed class MainForm : Form
 
         _state.PackageSourceFolder = dialog.SelectedPath;
         _sourceFolderText.Text = dialog.SelectedPath;
+        UpdateSourceStatus();
         SaveState();
         RefreshGameList(SelectedGame?.Id);
     }
@@ -601,6 +952,7 @@ public sealed class MainForm : Form
 
             _state.PackageSourceFolder = _stateStore.ImportedPackageDirectory;
             _sourceFolderText.Text = _state.PackageSourceFolder;
+            UpdateSourceStatus();
             SaveState();
             RefreshGameList(SelectedGame?.Id);
             ShowInfo(L(
@@ -662,11 +1014,53 @@ public sealed class MainForm : Form
 
     private async Task ScanForGamesAsync()
     {
+        await ScanForGamesAsync(_state.AdditionalScanFolders, includeKnownPlatforms: true);
+    }
+
+    private async Task ScanFolderForGamesAsync()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = L(
+                "Launcher'a bağlı olmayan veya taşınabilir oyunların bulunduğu klasörü seçin.",
+                "Select a folder containing launcher-free or portable games."),
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+            return;
+
+        var selectedFolder = Path.GetFullPath(dialog.SelectedPath);
+        if (!_state.AdditionalScanFolders.Contains(selectedFolder, StringComparer.OrdinalIgnoreCase))
+        {
+            _state.AdditionalScanFolders.Add(selectedFolder);
+            SaveState();
+        }
+
+        await ScanForGamesAsync([selectedFolder], includeKnownPlatforms: false);
+    }
+
+    private async Task ScanForGamesAsync(IReadOnlyList<string> additionalFolders, bool includeKnownPlatforms)
+    {
         try
         {
             Enabled = false;
             UseWaitCursor = true;
-            var discovered = await Task.Run(_gameDiscoveryService.Scan);
+            var discovered = await Task.Run(() =>
+                _gameDiscoveryService.Scan(additionalFolders, includeKnownPlatforms));
+            var discoveredByPath = discovered
+                .GroupBy(game => Path.GetFullPath(game.ExecutablePath), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+            var metadataUpdated = 0;
+            foreach (var existingGame in _state.Games)
+            {
+                var existingPath = Path.GetFullPath(existingGame.ExecutablePath);
+                if (!discoveredByPath.TryGetValue(existingPath, out var match) ||
+                    existingGame.SteamAppId is not null || match.SteamAppId is null)
+                    continue;
+                existingGame.SteamAppId = match.SteamAppId;
+                metadataUpdated++;
+            }
             var existingPaths = _state.Games
                 .Select(game => Path.GetFullPath(game.ExecutablePath))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -679,10 +1073,18 @@ public sealed class MainForm : Form
 
             if (newGames.Count == 0)
             {
+                if (metadataUpdated > 0)
+                {
+                    SaveState();
+                    RefreshGameList(SelectedGame?.Id);
+                }
                 ShowInfo(discovered.Count == 0
-                    ? L("Steam veya Epic Games kütüphanelerinde uygun 64-bit oyun EXE'si bulunamadı.",
-                        "No suitable 64-bit game executable was found in the Steam or Epic Games libraries.")
-                    : L("Bulunan oyunların tamamı zaten listede.", "All discovered games are already in the list."));
+                    ? L("Taranan platformlarda veya klasörlerde uygun 64-bit oyun EXE'si bulunamadı.",
+                        "No suitable 64-bit game executable was found in the scanned platforms or folders.")
+                    : metadataUpdated > 0
+                        ? L($"{metadataUpdated} oyunun Steam bilgisi yenilendi. Tüm bulunan oyunlar zaten listede.",
+                            $"Steam information was refreshed for {metadataUpdated} games. All discovered games are already listed.")
+                        : L("Bulunan oyunların tamamı zaten listede.", "All discovered games are already in the list."));
                 return;
             }
 
@@ -710,6 +1112,11 @@ public sealed class MainForm : Form
                 ShowInfo(L(
                     $"{selected.Count} oyun listeye eklendi. Kurulum yapılmadan önce EXE yolunu ve anti-cheat durumunu kontrol edin.",
                     $"{selected.Count} games were added. Check the executable path and anti-cheat status before installing."));
+            }
+            else if (metadataUpdated > 0)
+            {
+                SaveState();
+                RefreshGameList(SelectedGame?.Id);
             }
         }
         catch (Exception ex)
@@ -855,26 +1262,50 @@ public sealed class MainForm : Form
 
     private void RefreshGameList(Guid? selectedId = null)
     {
-        selectedId ??= SelectedGame?.Id;
-        _gamesList.BeginUpdate();
-        _gamesList.Items.Clear();
-        foreach (var game in _state.Games.OrderBy(g => g.Name, StringComparer.CurrentCultureIgnoreCase))
+        selectedId ??= _selectedGameId;
+        var query = _gameSearchText.Text.Trim();
+        var visibleGames = _state.Games
+            .Where(game => string.IsNullOrWhiteSpace(query) ||
+                           game.Name.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                           Path.GetFileNameWithoutExtension(game.ExecutablePath)
+                               .Contains(query, StringComparison.CurrentCultureIgnoreCase))
+            .OrderBy(game => game.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+        var cards = new List<GameLibraryCardData>();
+        foreach (var game in visibleGames)
         {
             var inspection = _installationService.Inspect(game, _state.PackageSourceFolder);
-            var item = new ListViewItem(game.Name) { Tag = game, ForeColor = AppTheme.TextPrimary, UseItemStyleForSubItems = false };
-            item.SubItems.Add($"{game.Multiplier}X");
-            item.SubItems.Add(inspection.Summary);
-            item.SubItems[1].ForeColor = AppTheme.Accent;
-            item.SubItems[2].ForeColor = StatusColor(inspection.State);
-            _gamesList.Items.Add(item);
-            if (game.Id == selectedId)
-                item.Selected = true;
+            cards.Add(new GameLibraryCardData(
+                game,
+                inspection.Summary,
+                inspection.State,
+                _artworkService.GetCachedArtworkPath(game)));
         }
-        _gamesList.EndUpdate();
 
-        if (_gamesList.SelectedItems.Count == 0 && _gamesList.Items.Count > 0)
-            _gamesList.Items[0].Selected = true;
+        if (selectedId is null || visibleGames.All(game => game.Id != selectedId))
+            selectedId = visibleGames.FirstOrDefault()?.Id;
+        _selectedGameId = selectedId;
+        _libraryGrid.SetGames(cards, selectedId);
+        _gameCountLabel.Text = L($"{visibleGames.Count} oyun · {_state.Games.Count} toplam",
+            $"{visibleGames.Count} games · {_state.Games.Count} total");
         UpdateSelectionPanel();
+        if (Visible && IsHandleCreated)
+            QueueLibraryArtworkPrefetch(visibleGames);
+    }
+
+    private void UpdateSourceStatus()
+    {
+        var available = InstallationService.TryValidateSource(_state.PackageSourceFolder, out _);
+        var trimmedPath = _state.PackageSourceFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var folderName = Path.GetFileName(trimmedPath);
+        if (string.IsNullOrWhiteSpace(folderName))
+            folderName = _state.PackageSourceFolder;
+        _sourceStatusLabel.Text = available
+            ? L($"●  Paket hazır{Environment.NewLine}{folderName}",
+                $"●  Package ready{Environment.NewLine}{folderName}")
+            : L("○  Frame Gen dosyaları seçilmedi", "○  Frame Gen files not selected");
+        _sourceStatusLabel.ForeColor = available ? AppTheme.StatusReady : AppTheme.TextMuted;
+        _buttonToolTip.SetToolTip(_sourceStatusLabel, available ? _state.PackageSourceFolder : string.Empty);
     }
 
     private void UpdateSelectionPanel()
@@ -885,13 +1316,18 @@ public sealed class MainForm : Form
         {
             var enabled = game is not null;
             _selectedGameLabel.Text = game?.Name ?? L("Oyun seçilmedi", "No game selected");
+            _selectedGameLabel.Font = game?.Name.Length switch
+            {
+                > 42 => _heroTitleSmallFont,
+                > 27 => _heroTitleMediumFont,
+                _ => _heroTitleLargeFont
+            };
             _multiplierCombo.Enabled = enabled;
             _autoRepairCheck.Enabled = enabled;
             _installButton.Enabled = enabled;
             _uninstallButton.Enabled = enabled;
             _launchButton.Enabled = enabled;
             _onlineArtworkCheck.Enabled = enabled;
-            _refreshArtworkButton.Enabled = enabled && _state.OnlineArtworkEnabled;
             _onlineArtworkCheck.Checked = _state.OnlineArtworkEnabled;
 
             if (game is null)
@@ -913,7 +1349,8 @@ public sealed class MainForm : Form
             _autoRepairCheck.Checked = game.AutoRepairBeforeLaunch;
             var inspection = _installationService.Inspect(game, _state.PackageSourceFolder);
             _statusLabel.Text = inspection.Summary;
-            _detailsLabel.Text = $"{inspection.Details}{Environment.NewLine}{game.ExecutablePath}";
+            _detailsLabel.Text = $"{inspection.Details}{Environment.NewLine}{CompactPath(game.ExecutablePath, 76)}";
+            _buttonToolTip.SetToolTip(_detailsLabel, $"{inspection.Details}{Environment.NewLine}{game.ExecutablePath}");
             _statusLabel.ForeColor = StatusColor(inspection.State);
         }
         finally
@@ -924,15 +1361,108 @@ public sealed class MainForm : Form
         _ = UpdateArtworkAsync(game, forceRefresh: false);
     }
 
+    private static string CompactPath(string path, int maximumLength)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.Length <= maximumLength)
+            return path;
+
+        var fileName = Path.GetFileName(path);
+        var root = Path.GetPathRoot(path) ?? string.Empty;
+        var compact = $"{root}…{Path.DirectorySeparatorChar}{fileName}";
+        return compact.Length <= maximumLength
+            ? compact
+            : $"…{Path.DirectorySeparatorChar}{fileName}";
+    }
+
     private void OnlineArtworkChanged()
     {
         if (_updatingControls)
             return;
 
         _state.OnlineArtworkEnabled = _onlineArtworkCheck.Checked;
-        _refreshArtworkButton.Enabled = _state.OnlineArtworkEnabled && SelectedGame is not null;
+        if (!_state.OnlineArtworkEnabled)
+            _libraryArtworkCancellation?.Cancel();
         SaveState();
         _ = UpdateArtworkAsync(SelectedGame, forceRefresh: false);
+        if (_state.OnlineArtworkEnabled)
+            QueueLibraryArtworkPrefetch();
+    }
+
+    private void QueueLibraryArtworkPrefetch(IReadOnlyList<GameEntry>? games = null)
+    {
+        if (!_state.OnlineArtworkEnabled || IsDisposed || Disposing)
+            return;
+
+        games ??= _state.Games
+            .Where(game => string.IsNullOrWhiteSpace(_gameSearchText.Text) ||
+                           game.Name.Contains(_gameSearchText.Text.Trim(), StringComparison.CurrentCultureIgnoreCase))
+            .OrderBy(game => game.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+
+        var uncachedGames = games
+            .Where(game => game.Id != _selectedGameId && _artworkService.NeedsOnlineArtwork(game))
+            .Take(40)
+            .ToList();
+        if (uncachedGames.Count == 0)
+            return;
+
+        _libraryArtworkCancellation?.Cancel();
+        _libraryArtworkCancellation?.Dispose();
+        _libraryArtworkCancellation = new CancellationTokenSource();
+        _ = PrefetchLibraryArtworkAsync(uncachedGames, _libraryArtworkCancellation.Token);
+    }
+
+    private async Task PrefetchLibraryArtworkAsync(IReadOnlyList<GameEntry> games, CancellationToken cancellationToken)
+    {
+        using var gate = new SemaphoreSlim(2);
+        var stateChanged = false;
+        var tasks = games.Select(async game =>
+        {
+            await gate.WaitAsync(cancellationToken);
+            GameArtworkResult? result;
+            try
+            {
+                result = await _artworkService.GetArtworkAsync(game, forceRefresh: false, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                result = null;
+            }
+            finally
+            {
+                gate.Release();
+            }
+
+            if (result is null || cancellationToken.IsCancellationRequested || IsDisposed || Disposing)
+                return;
+
+            // Each card appears as soon as its download finishes; a slow or
+            // unavailable game cannot hold back the rest of the gallery.
+            _libraryGrid.SetArtwork(game.Id, result.LocalPath);
+            if (result.SteamAppId is { } resultAppId && game.SteamAppId != resultAppId)
+            {
+                game.SteamAppId = resultAppId;
+                stateChanged = true;
+            }
+        }).ToArray();
+
+        try
+        {
+            await Task.WhenAll(tasks);
+            if (cancellationToken.IsCancellationRequested || IsDisposed || Disposing)
+                return;
+
+            if (stateChanged)
+                SaveState();
+        }
+        catch (OperationCanceledException)
+        {
+            // Search/filter changes replace the current background artwork pass.
+        }
     }
 
     private async Task UpdateArtworkAsync(GameEntry? game, bool forceRefresh)
@@ -951,8 +1481,13 @@ public sealed class MainForm : Form
             return;
         }
 
-        _artworkStatusLabel.Text = L("STEAM'DE GÖRSEL ARANIYOR…", "LOOKING FOR ARTWORK ON STEAM…");
-        _refreshArtworkButton.Enabled = false;
+        var cachedArtwork = _artworkService.GetCachedArtworkPath(game);
+        _heroPanel.SetArtwork(cachedArtwork);
+        _artworkStatusLabel.Text = cachedArtwork is null
+            ? L("STEAM CDN'DE GÖRSEL ARANIYOR…", "LOOKING FOR ARTWORK ON STEAM CDN…")
+            : Path.GetFileName(cachedArtwork).StartsWith("local_", StringComparison.OrdinalIgnoreCase)
+                ? L("YEREL KAPAK • STEAM'DE KONTROL EDİLİYOR…", "LOCAL COVER • CHECKING STEAM…")
+                : L("STEAM CDN GÖRSELİ • ÖNBELLEK", "STEAM CDN ARTWORK • CACHED");
         try
         {
             var result = await _artworkService.GetArtworkAsync(game, forceRefresh, cancellationToken);
@@ -961,16 +1496,23 @@ public sealed class MainForm : Form
 
             if (result is null)
             {
-                _heroPanel.SetArtwork(null);
-                _artworkStatusLabel.Text = L("STEAM GÖRSELİ BULUNAMADI", "STEAM ARTWORK NOT FOUND");
+                if (cachedArtwork is null)
+                    _heroPanel.SetArtwork(null);
+                _artworkStatusLabel.Text = cachedArtwork is null
+                    ? L("STEAM CDN GÖRSELİ BULUNAMADI", "STEAM CDN ARTWORK NOT FOUND")
+                    : L("ÖNBELLEKTEKİ GÖRSEL KULLANILIYOR", "USING CACHED ARTWORK");
                 return;
             }
 
             _heroPanel.SetArtwork(result.LocalPath);
-            _artworkStatusLabel.Text = L("STEAM GÖRSELİ • ÖNBELLEĞE ALINDI", "STEAM ARTWORK • CACHED");
-            if (game.SteamAppId != result.SteamAppId)
+            _libraryGrid.SetArtwork(game.Id, result.LocalPath);
+            var localCover = result.SourceUrl.Equals(GameArtworkService.LocalCoverSource, StringComparison.Ordinal);
+            _artworkStatusLabel.Text = localCover
+                ? L("YEREL OYUN KAPAĞI • OTOMATİK", "LOCAL GAME COVER • AUTOMATIC")
+                : L("STEAM CDN GÖRSELİ • ÖNBELLEĞE ALINDI", "STEAM CDN ARTWORK • CACHED");
+            if (result.SteamAppId is { } resultAppId && game.SteamAppId != resultAppId)
             {
-                game.SteamAppId = result.SteamAppId;
+                game.SteamAppId = resultAppId;
                 SaveState();
             }
         }
@@ -982,15 +1524,11 @@ public sealed class MainForm : Form
         {
             if (!cancellationToken.IsCancellationRequested && SelectedGame?.Id == game.Id)
             {
-                _heroPanel.SetArtwork(null);
+                if (cachedArtwork is null)
+                    _heroPanel.SetArtwork(null);
                 _artworkStatusLabel.Text = L("GÖRSEL İNDİRİLEMEDİ • DEGRADE KULLANILIYOR",
                     "ARTWORK UNAVAILABLE • USING GRADIENT");
             }
-        }
-        finally
-        {
-            if (!cancellationToken.IsCancellationRequested && SelectedGame?.Id == game.Id)
-                _refreshArtworkButton.Enabled = _state.OnlineArtworkEnabled;
         }
     }
 
@@ -1015,6 +1553,34 @@ public sealed class MainForm : Form
         Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold)
     };
 
+    private static Label NewSidebarCaption(string text) => new()
+    {
+        AutoSize = true,
+        Text = text,
+        ForeColor = AppTheme.TextMuted,
+        BackColor = Color.Transparent,
+        Font = new Font("Segoe UI Semibold", 7.5F, FontStyle.Bold),
+        Margin = new Padding(8, 0, 0, 2)
+    };
+
+    private static ModernButton NewSidebarButton(string text, bool active = false) => new()
+    {
+        Text = text,
+        Width = 176,
+        Height = 40,
+        AutoSize = false,
+        TextAlign = ContentAlignment.MiddleLeft,
+        Padding = new Padding(13, 0, 8, 0),
+        Margin = new Padding(0, 2, 0, 2),
+        BackColor = active ? AppTheme.Primary : AppTheme.SurfaceAlt,
+        ForeColor = active ? Color.White : AppTheme.TextSecondary,
+        BorderColor = active ? Color.Transparent : AppTheme.Border,
+        HoverBackColor = active ? AppTheme.PrimaryHover : AppTheme.SurfaceAlt,
+        PressedBackColor = AppTheme.SurfaceRaised,
+        CornerRadius = 9,
+        Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold)
+    };
+
     private static Label NewFieldLabel(string text) => new()
     {
         AutoSize = true,
@@ -1034,20 +1600,21 @@ public sealed class MainForm : Form
     private static void StyleButton(Button button, bool secondary)
     {
         button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderSize = secondary ? 1 : 0;
+        button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.BorderColor = AppTheme.Border;
         button.BackColor = secondary ? AppTheme.SurfaceAlt : AppTheme.Primary;
-        button.ForeColor = Color.White;
+        button.ForeColor = secondary ? AppTheme.TextPrimary : Color.White;
         button.Padding = new Padding(10, 5, 10, 5);
         button.Margin = new Padding(0, 2, 8, 6);
         button.Cursor = Cursors.Hand;
         button.Height = 36;
+        button.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold);
         if (button is ModernButton modern)
         {
             modern.CornerRadius = 9;
-            modern.BorderColor = secondary ? AppTheme.Border : Color.FromArgb(95, AppTheme.Accent);
-            modern.HoverBackColor = secondary ? Color.FromArgb(38, 50, 74) : AppTheme.PrimaryHover;
-            modern.PressedBackColor = secondary ? Color.FromArgb(18, 28, 46) : Color.FromArgb(67, 56, 202);
+            modern.BorderColor = secondary ? AppTheme.Border : Color.Transparent;
+            modern.HoverBackColor = secondary ? AppTheme.SurfaceRaised : AppTheme.PrimaryHover;
+            modern.PressedBackColor = secondary ? Color.FromArgb(214, 220, 233) : Color.FromArgb(67, 56, 202);
         }
     }
 
