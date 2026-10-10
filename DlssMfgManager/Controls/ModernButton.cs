@@ -62,19 +62,27 @@ public sealed class ModernButton : Button
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        // A UserPaint Button otherwise leaves the pixels outside the rounded
+        // path uninitialised on the real Win32 surface (they show up as black
+        // hooks/lines, especially at 125% DPI). Paint the actual parent first.
+        if (Parent is not null)
+            ButtonRenderer.DrawParentBackground(e.Graphics, ClientRectangle, this);
+        else
+            e.Graphics.Clear(SystemColors.Control);
+
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
         var bounds = new Rectangle(0, 0, Math.Max(1, Width - 1), Math.Max(1, Height - 1));
         var radius = Math.Min(CornerRadius, Math.Min(bounds.Width, bounds.Height) / 2);
         using var path = RoundedRectangle(bounds, radius);
 
-        var baseColor = Enabled ? BackColor : Blend(BackColor, Color.Black, 0.48f);
+        var baseColor = Enabled ? BackColor : Blend(BackColor, Color.White, 0.44f);
         if (Enabled && _pressed)
             baseColor = PressedBackColor.IsEmpty ? Blend(BackColor, Color.Black, 0.22f) : PressedBackColor;
         else if (Enabled && _hovered)
             baseColor = HoverBackColor.IsEmpty ? Blend(BackColor, Color.White, 0.12f) : HoverBackColor;
 
-        var lowerColor = Blend(baseColor, Color.Black, 0.10f);
-        using (var fill = new LinearGradientBrush(bounds, baseColor, lowerColor, LinearGradientMode.Vertical))
+        using (var fill = new SolidBrush(baseColor))
             e.Graphics.FillPath(fill, path);
 
         if (BorderColor.A > 0)
@@ -84,14 +92,23 @@ public sealed class ModernButton : Button
         }
 
         var textColor = Enabled ? ForeColor : Color.FromArgb(125, ForeColor);
-        TextRenderer.DrawText(e.Graphics, Text, Font, bounds, textColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-            TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        var textBounds = new Rectangle(bounds.X + Padding.Left, bounds.Y,
+            Math.Max(1, bounds.Width - Padding.Horizontal), bounds.Height);
+        var alignment = TextAlign switch
+        {
+            ContentAlignment.MiddleLeft or ContentAlignment.TopLeft or ContentAlignment.BottomLeft => TextFormatFlags.Left,
+            ContentAlignment.MiddleRight or ContentAlignment.TopRight or ContentAlignment.BottomRight => TextFormatFlags.Right,
+            _ => TextFormatFlags.HorizontalCenter
+        };
+        TextRenderer.DrawText(e.Graphics, Text, Font, textBounds, textColor,
+            alignment | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
         if (Focused && ShowFocusCues)
         {
-            var focus = Rectangle.Inflate(bounds, -4, -4);
-            ControlPaint.DrawFocusRectangle(e.Graphics, focus, textColor, Color.Transparent);
+            var focus = Rectangle.Inflate(bounds, -3, -3);
+            using var focusPath = RoundedRectangle(focus, Math.Max(3, radius - 3));
+            using var focusPen = new Pen(Color.FromArgb(255, 150, 156, 247), 1.5F);
+            e.Graphics.DrawPath(focusPen, focusPath);
         }
     }
 
