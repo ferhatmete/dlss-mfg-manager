@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
 using DlssMfgManager.Models;
 using Microsoft.Win32;
 
@@ -11,29 +13,73 @@ public sealed partial class GameDiscoveryService
     [
         "_CommonRedist", "CommonRedist", "Redist", "Redistributables", "Prereq", "Prerequisites",
         "Installer", "Support", "EasyAntiCheat", "EasyAntiCheat_EOS", "BattlEye", "CrashReportClient",
-        "Engine\\Extras", "Engine\\Binaries\\ThirdParty"
+        "Engine\\Extras", "Engine\\Binaries", "Engine\\Plugins", "Engine\\Source", "__Installer"
     ];
 
     private static readonly string[] ExcludedFileTerms =
     [
         "unins", "uninstall", "crashreport", "crashhandler", "reportclient", "easyanticheat", "eac_",
         "battleye", "beservice", "setup", "installer", "redist", "dxsetup", "vc_redist", "dotnet",
-        "helper", "webhelper", "bootstrap", "diagnostic", "benchmark", "dedicatedserver"
+        "helper", "webhelper", "bootstrap", "launcher", "diagnostic", "benchmark", "dedicatedserver", "unrealeditor",
+        "unityhub", "epicgameslauncher", "goggalaxy", "galaxyclient", "eadesktop", "ealauncher",
+        "ubisoftconnect", "upc", "rockstarservice", "socialclubhelper", "battle.net", "crashpad"
     ];
 
-    public IReadOnlyList<DiscoveredGame> Scan()
+    private static readonly string[] LauncherProductTerms =
+    [
+        "steam", "epic games launcher", "gog galaxy", "ea app", "origin", "ubisoft connect",
+        "battle.net", "rockstar games launcher", "amazon games", "xbox", "gaming services", "riot client"
+    ];
+
+    private static readonly string[] NonGameProductTerms =
+    [
+        "unreal engine", "quixel bridge", "ubisoft anti-cheat", "riot vanguard", "epic online services",
+        "easy anti-cheat", "battleye", "steamworks common redistributables", "dedicated server",
+        "modding tools", "development kit", "fab ue plugin"
+    ];
+
+    public IReadOnlyList<DiscoveredGame> Scan(
+        IEnumerable<string>? additionalFolders = null,
+        bool includeKnownPlatforms = true)
     {
         var games = new List<DiscoveredGame>();
-        ScanSteam(games);
-        ScanEpic(games);
+        if (includeKnownPlatforms)
+        {
+            ScanSteam(games);
+            ScanEpic(games);
+            ScanXboxGames(games);
+            ScanGogRegistry(games);
+            ScanInstalledGameRegistry(games);
+            ScanKnownLibraryFolders(games);
+        }
+
+        foreach (var folder in (additionalFolders ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+            ScanLibraryFolder(folder, "Local / Other", games, includeRootCandidate: true);
 
         return games
             .Where(game => File.Exists(game.ExecutablePath))
             .GroupBy(game => Path.GetFullPath(game.ExecutablePath), StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.First())
+            .Select(group => group
+                .OrderByDescending(game => DiscoveryPriority(game.Platform))
+                .ThenByDescending(game => game.Name.Length)
+                .First())
             .OrderBy(game => game.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
     }
+
+    public IReadOnlyList<DiscoveredGame> Scan() => Scan([], includeKnownPlatforms: true);
+
+    private static int DiscoveryPriority(string platform) => platform switch
+    {
+        "Steam" => 100,
+        "Epic Games" => 95,
+        "Xbox / Microsoft Store" => 90,
+        "GOG" => 85,
+        "EA app" or "Ubisoft Connect" or "Battle.net" or "Rockstar Games" or "Amazon Games" => 80,
+        "Riot Games" or "itch.io" => 75,
+        "Steam / Local" => 30,
+        _ => 10
+    };
 
     private static void ScanSteam(List<DiscoveredGame> games)
     {
@@ -59,7 +105,8 @@ public sealed partial class GameDiscoveryService
                         var name = ReadVdfValue(contents, "name");
                         var appIdText = ReadVdfValue(contents, "appid");
                         var installDirectoryName = ReadVdfValue(contents, "installdir");
-                        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installDirectoryName))
+                        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installDirectoryName) ||
+                            IsNonGameProduct(name))
                             continue;
 
                         var installDirectory = Path.Combine(steamAppsDirectory, "common", installDirectoryName);
@@ -73,6 +120,12 @@ public sealed partial class GameDiscoveryService
                         // A single broken manifest must not stop the rest of the scan.
                     }
                 }
+
+                // Also inspect orphaned/copy-installed folders under Steam's
+                // common directory. They may have no current appmanifest but
+                // can still contain a valid local game executable.
+                ScanLibraryFolder(Path.Combine(steamAppsDirectory, "common"),
+                    "Steam / Local", games, includeRootCandidate: false);
             }
         }
     }
@@ -150,7 +203,8 @@ public sealed partial class GameDiscoveryService
                 var name = ReadJsonString(root, "DisplayName");
                 var installLocation = ReadJsonString(root, "InstallLocation");
                 var launchExecutable = ReadJsonString(root, "LaunchExecutable");
-                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installLocation))
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installLocation) ||
+                    IsNonGameProduct(name))
                     continue;
 
                 string? executable = null;
@@ -160,7 +214,7 @@ public sealed partial class GameDiscoveryService
                         .Replace('/', Path.DirectorySeparatorChar)
                         .TrimStart(Path.DirectorySeparatorChar);
                     var manifestExecutable = Path.GetFullPath(Path.Combine(installLocation, normalizedRelativePath));
-                    if (File.Exists(manifestExecutable) && Is64BitPortableExecutable(manifestExecutable))
+                    if (File.Exists(manifestExecutable) && IsLikelyGameExecutable(manifestExecutable))
                         executable = manifestExecutable;
                 }
 
@@ -174,6 +228,383 @@ public sealed partial class GameDiscoveryService
             }
         }
     }
+
+    private static void ScanXboxGames(List<DiscoveredGame> games)
+    {
+        foreach (var drive in ReadyFixedDrives())
+        {
+            var xboxRoot = Path.Combine(drive.RootDirectory.FullName, "XboxGames");
+            if (Directory.Exists(xboxRoot))
+                ScanLibraryFolder(xboxRoot, "Xbox / Microsoft Store", games, includeRootCandidate: false);
+        }
+    }
+
+    private static void ScanGogRegistry(List<DiscoveredGame> games)
+    {
+        var locations = new[]
+        {
+            (RegistryHive.LocalMachine, RegistryView.Registry64, @"SOFTWARE\GOG.com\Games"),
+            (RegistryHive.LocalMachine, RegistryView.Registry32, @"SOFTWARE\GOG.com\Games"),
+            (RegistryHive.CurrentUser, RegistryView.Default, @"Software\GOG.com\Games")
+        };
+
+        foreach (var (hive, view, keyPath) in locations)
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var gamesKey = baseKey.OpenSubKey(keyPath);
+                if (gamesKey is null)
+                    continue;
+
+                foreach (var subKeyName in gamesKey.GetSubKeyNames())
+                {
+                    using var gameKey = gamesKey.OpenSubKey(subKeyName);
+                    var name = RegistryString(gameKey, "gameName");
+                    var installDirectory = RegistryString(gameKey, "path");
+                    var executableValue = RegistryString(gameKey, "exe");
+                    if (string.IsNullOrWhiteSpace(installDirectory) || !Directory.Exists(installDirectory))
+                        continue;
+
+                    name = string.IsNullOrWhiteSpace(name) ? Path.GetFileName(installDirectory) : name;
+                    var executable = ResolveExecutableValue(installDirectory, executableValue);
+                    if (executable is null || !IsLikelyGameExecutable(executable))
+                        executable = FindBestExecutable(installDirectory, name);
+                    if (executable is not null)
+                        games.Add(new DiscoveredGame(name, executable, "GOG"));
+                }
+            }
+            catch
+            {
+                // Registry data varies across GOG Galaxy and offline installers.
+            }
+        }
+    }
+
+    private static void ScanInstalledGameRegistry(List<DiscoveredGame> games)
+    {
+        var locations = new[]
+        {
+            (RegistryHive.LocalMachine, RegistryView.Registry64,
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (RegistryHive.LocalMachine, RegistryView.Registry32,
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+            (RegistryHive.CurrentUser, RegistryView.Default,
+                @"Software\Microsoft\Windows\CurrentVersion\Uninstall")
+        };
+
+        foreach (var (hive, view, keyPath) in locations)
+        {
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, view);
+                using var uninstallKey = baseKey.OpenSubKey(keyPath);
+                if (uninstallKey is null)
+                    continue;
+
+                foreach (var subKeyName in uninstallKey.GetSubKeyNames())
+                {
+                    using var productKey = uninstallKey.OpenSubKey(subKeyName);
+                    var name = RegistryString(productKey, "DisplayName");
+                    var publisher = RegistryString(productKey, "Publisher");
+                    var installDirectory = NormalizeInstallDirectory(RegistryString(productKey, "InstallLocation"));
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(installDirectory) ||
+                        !Directory.Exists(installDirectory) || IsLauncherProduct(name) || IsNonGameProduct(name))
+                        continue;
+
+                    var platform = DetectPlatform(name, publisher, installDirectory);
+                    if (platform is null)
+                        continue;
+
+                    var displayIcon = RegistryString(productKey, "DisplayIcon");
+                    var executable = ResolveExecutableValue(installDirectory, displayIcon);
+                    if (executable is null || !IsLikelyGameExecutable(executable))
+                        executable = FindBestExecutable(installDirectory, name);
+                    if (executable is not null)
+                        games.Add(new DiscoveredGame(name, executable, platform));
+                }
+            }
+            catch
+            {
+                // One inaccessible uninstall hive must not cancel other sources.
+            }
+        }
+    }
+
+    private static void ScanKnownLibraryFolders(List<DiscoveredGame> games)
+    {
+        var roots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var drive in ReadyFixedDrives())
+        {
+            AddKnownRoot(roots, drive, "Games", "Local / Other");
+            AddKnownRoot(roots, drive, "PC Games", "Local / Other");
+            AddKnownRoot(roots, drive, "PCGames", "Local / Other");
+            AddKnownRoot(roots, drive, "Portable Games", "Local / Other");
+            AddKnownRoot(roots, drive, "Oyunlar", "Local / Other");
+            AddKnownRoot(roots, drive, "GOG Games", "GOG");
+            AddKnownRoot(roots, drive, "EA Games", "EA app");
+            AddKnownRoot(roots, drive, "Ubisoft Games", "Ubisoft Connect");
+            AddKnownRoot(roots, drive, "Rockstar Games", "Rockstar Games");
+            AddKnownRoot(roots, drive, "Amazon Games", "Amazon Games");
+            AddKnownRoot(roots, drive, "Riot Games", "Riot Games");
+
+            AddKnownRoot(roots, drive, @"Program Files\EA Games", "EA app");
+            AddKnownRoot(roots, drive, @"Program Files\Rockstar Games", "Rockstar Games");
+            AddKnownRoot(roots, drive, @"Program Files\Riot Games", "Riot Games");
+            AddKnownRoot(roots, drive, @"Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games",
+                "Ubisoft Connect");
+            AddKnownRoot(roots, drive, @"Program Files (x86)\GOG Galaxy\Games", "GOG");
+        }
+
+        var roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        if (!string.IsNullOrWhiteSpace(roaming))
+        {
+            var itchRoot = Path.Combine(roaming, "itch", "apps");
+            if (Directory.Exists(itchRoot))
+                roots[itchRoot] = "itch.io";
+        }
+
+        foreach (var (root, platform) in roots)
+            ScanLibraryFolder(root, platform, games, includeRootCandidate: false);
+    }
+
+    private static void AddKnownRoot(
+        IDictionary<string, string> roots,
+        DriveInfo drive,
+        string relativePath,
+        string platform)
+    {
+        var path = Path.Combine(drive.RootDirectory.FullName, relativePath);
+        if (Directory.Exists(path))
+            roots[path] = platform;
+    }
+
+    private static void ScanLibraryFolder(
+        string root,
+        string platform,
+        List<DiscoveredGame> games,
+        bool includeRootCandidate)
+    {
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            return;
+
+        var normalizedRoot = Path.GetFullPath(root);
+        if (includeRootCandidate && HasExecutableInTopLevel(normalizedRoot))
+            AddFolderCandidate(normalizedRoot, platform, games);
+
+        foreach (var directory in EnumerateDirectoriesSafe(normalizedRoot))
+        {
+            if (IsLauncherProduct(Path.GetFileName(directory)) || IsNonGameProduct(Path.GetFileName(directory)))
+                continue;
+
+            var contentDirectory = Directory.Exists(Path.Combine(directory, "Content"))
+                ? Path.Combine(directory, "Content")
+                : directory;
+            AddFolderCandidate(contentDirectory, platform, games, Path.GetFileName(directory));
+        }
+    }
+
+    private static void AddFolderCandidate(
+        string directory,
+        string platform,
+        List<DiscoveredGame> games,
+        string? displayName = null)
+    {
+        displayName = string.IsNullOrWhiteSpace(displayName) ? Path.GetFileName(directory) : displayName;
+        if (string.IsNullOrWhiteSpace(displayName))
+            displayName = "Local game";
+
+        var xboxCandidate = TryReadMicrosoftGameConfig(directory, displayName);
+        if (xboxCandidate is not null)
+        {
+            games.Add(xboxCandidate with { Platform = platform.Contains("Xbox", StringComparison.OrdinalIgnoreCase)
+                ? platform
+                : "Xbox / Microsoft Store" });
+            return;
+        }
+
+        var executable = FindBestExecutable(directory, displayName);
+        if (executable is not null)
+            games.Add(new DiscoveredGame(displayName, executable, platform));
+    }
+
+    private static DiscoveredGame? TryReadMicrosoftGameConfig(string directory, string fallbackName)
+    {
+        var configPath = FindFileSafely(directory, "MicrosoftGame.config", maximumDepth: 3);
+        if (configPath is null)
+            return null;
+
+        try
+        {
+            var settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using var reader = XmlReader.Create(configPath, settings);
+            var document = XDocument.Load(reader, LoadOptions.None);
+            var displayName = document.Descendants()
+                .FirstOrDefault(element => element.Name.LocalName == "ShellVisuals")?
+                .Attribute("DefaultDisplayName")?.Value;
+            if (string.IsNullOrWhiteSpace(displayName) || displayName.StartsWith("ms-resource", StringComparison.OrdinalIgnoreCase))
+                displayName = fallbackName;
+
+            var executableDirectory = Path.GetDirectoryName(configPath)!;
+            foreach (var element in document.Descendants().Where(element => element.Name.LocalName == "Executable"))
+            {
+                if (bool.TryParse(element.Attribute("IsDevOnly")?.Value, out var developmentOnly) && developmentOnly)
+                    continue;
+                var executableName = element.Attribute("Name")?.Value;
+                var executable = ResolveExecutableValue(executableDirectory, executableName);
+                if (executable is not null && IsLikelyGameExecutable(executable))
+                    return new DiscoveredGame(displayName, executable, "Xbox / Microsoft Store");
+            }
+
+            var fallbackExecutable = FindBestExecutable(executableDirectory, displayName);
+            return fallbackExecutable is null
+                ? null
+                : new DiscoveredGame(displayName, fallbackExecutable, "Xbox / Microsoft Store");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? FindFileSafely(string root, string fileName, int maximumDepth)
+    {
+        var pending = new Stack<(string Directory, int Depth)>();
+        pending.Push((root, 0));
+        while (pending.Count > 0)
+        {
+            var (directory, depth) = pending.Pop();
+            try
+            {
+                var candidate = Path.Combine(directory, fileName);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+            catch
+            {
+                // Keep searching accessible siblings.
+            }
+
+            if (depth >= maximumDepth)
+                continue;
+            foreach (var child in EnumerateDirectoriesSafe(directory))
+                pending.Push((child, depth + 1));
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<DriveInfo> ReadyFixedDrives()
+    {
+        try
+        {
+            return DriveInfo.GetDrives()
+                .Where(drive => drive.IsReady && drive.DriveType == DriveType.Fixed)
+                .ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static IEnumerable<string> EnumerateDirectoriesSafe(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(directory).ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static bool HasExecutableInTopLevel(string directory)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(directory, "*.exe", SearchOption.TopDirectoryOnly).Any();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? ResolveExecutableValue(string installDirectory, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var expanded = Environment.ExpandEnvironmentVariables(value.Trim());
+        var commaIndex = expanded.LastIndexOf(',');
+        if (commaIndex > 2 && int.TryParse(expanded[(commaIndex + 1)..].Trim(), out _))
+            expanded = expanded[..commaIndex];
+        expanded = expanded.Trim().Trim('"');
+
+        try
+        {
+            var candidate = Path.IsPathRooted(expanded)
+                ? expanded
+                : Path.Combine(installDirectory, expanded.Replace('/', Path.DirectorySeparatorChar));
+            return File.Exists(candidate) ? Path.GetFullPath(candidate) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string NormalizeInstallDirectory(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+        try
+        {
+            return Path.GetFullPath(Environment.ExpandEnvironmentVariables(value.Trim().Trim('"')));
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string? DetectPlatform(string name, string publisher, string installDirectory)
+    {
+        var value = $"{name} {publisher} {installDirectory}".ToLowerInvariant();
+        if (value.Contains("gog") || value.Contains("cd projekt")) return "GOG";
+        if (value.Contains("electronic arts") || value.Contains("ea games")) return "EA app";
+        if (value.Contains("ubisoft")) return "Ubisoft Connect";
+        if (value.Contains("blizzard") || value.Contains("battle.net") || value.Contains("activision")) return "Battle.net";
+        if (value.Contains("rockstar")) return "Rockstar Games";
+        if (value.Contains("amazon games")) return "Amazon Games";
+        if (value.Contains("riot games")) return "Riot Games";
+        if (value.Contains("itch.io") || value.Contains("\\itch\\apps")) return "itch.io";
+        if (value.Contains("xbox game studios") || value.Contains("xboxgames") || value.Contains("microsoftgame.config"))
+            return "Xbox / Microsoft Store";
+        return null;
+    }
+
+    private static bool IsLauncherProduct(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return LauncherProductTerms.Any(term => normalized.Equals(term, StringComparison.OrdinalIgnoreCase) ||
+                                                normalized.Contains(term, StringComparison.OrdinalIgnoreCase) &&
+                                                (normalized.Contains("launcher") || normalized.Contains("client") ||
+                                                 normalized.Contains("services") || normalized == term));
+    }
+
+    private static bool IsNonGameProduct(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return NonGameProductTerms.Any(normalized.Contains) ||
+               normalized.EndsWith(" sdk", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(" editor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string RegistryString(RegistryKey? key, string valueName) =>
+        key?.GetValue(valueName) as string ?? string.Empty;
 
     private static string? FindBestExecutable(string installDirectory, string gameName)
     {

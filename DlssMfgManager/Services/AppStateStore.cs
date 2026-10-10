@@ -26,8 +26,11 @@ public sealed class AppStateStore
             if (!File.Exists(StatePath))
                 return new AppState();
 
-            return JsonSerializer.Deserialize<AppState>(File.ReadAllText(StatePath), JsonOptions)
-                   ?? new AppState();
+            var state = JsonSerializer.Deserialize<AppState>(File.ReadAllText(StatePath), JsonOptions)
+                        ?? new AppState();
+            state.Games ??= [];
+            state.AdditionalScanFolders ??= [];
+            return state;
         }
         catch
         {
